@@ -1,4 +1,6 @@
 import { createHash } from "crypto";
+// [ARENA]
+import { settle as arenaSettle } from "./arena/settler";
 import ipAnonymize from "ip-anonymize";
 import { Logger } from "winston";
 import WebSocket from "ws";
@@ -2048,6 +2050,14 @@ export class GameServer {
         } satisfies PlayerRecord;
       },
     );
+    // [ARENA] Sign and submit settle_match if this was a wagered game.
+    arenaSettle(this.id, this.winner, this.allClients).catch((e: unknown) =>
+      this.log.error("[arena] settlement failed", {
+        gameID: this.id,
+        error: String(e),
+      }),
+    );
+
     this.replayArchiveAttempted = true;
     archive(
       finalizeGameRecord(

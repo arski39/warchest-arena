@@ -949,6 +949,12 @@ export const ClientJoinMessageSchema = z.object({
   turnstileToken: z.string().nullable(),
   // Watch without playing: no spawn, no team, no lobby slot.
   spectator: z.boolean().optional(),
+  // [ARENA] Solana wallet fields — present only for wagered matches.
+  // walletAddress: base58 pubkey; walletSig: base64 ed25519 sig over
+  // "OpenFront Arena\nAuth: {jti}"; onchainTxSig: confirmed join_match tx.
+  walletAddress: z.string().optional(),
+  walletSig: z.string().optional(),
+  onchainTxSig: z.string().optional(),
 });
 
 export const ClientRejoinMessageSchema = z.object({

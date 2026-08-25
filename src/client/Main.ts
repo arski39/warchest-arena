@@ -84,6 +84,9 @@ import "./styles/core/variables.css";
 import "./styles/layout/container.css";
 import "./styles/layout/header.css";
 import "./styles/modal/chat.css";
+// [ARENA] Auto-reconnect if user previously authorized a Solana wallet.
+import { mountWalletProvider } from "./arena/WalletProvider";
+mountWalletProvider();
 
 declare global {
   interface Window {

@@ -28,6 +28,10 @@ import { getUserMe, verifyClientToken } from "./jwt";
 import { logger } from "./Logger";
 import { enforceVerifiedBadge } from "./Privilege";
 
+import { verifyWalletSig } from "./arena/auth";
+import { matchRegistry } from "./arena/matchRegistry";
+import { verifyOnchainMembership } from "./arena/rpcClient";
+import { walletRegistry } from "./arena/walletRegistry";
 import { MapPlaylist } from "./MapPlaylist";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { startPolling } from "./PollingLoop";
@@ -649,6 +653,47 @@ export async function startWorker() {
           log.info("Stripped unvouched verified-badge claim", {
             persistentID: persistentId,
             gameID: clientMsg.gameID,
+          });
+        }
+
+        // [ARENA] Wallet auth — only enforced for wagered games.
+        // In dev mode the on-chain check is skipped (mirrors Turnstile bypass above).
+        if (matchRegistry.isWagered(clientMsg.gameID)) {
+          const jti = claims?.jti;
+          const walletAddress = clientMsg.walletAddress;
+          if (!jti) {
+            ws.close(1002, "Unauthorized: token missing jti for wagered game");
+            return;
+          }
+          if (!walletAddress || !verifyWalletSig(jti, walletAddress, clientMsg.walletSig)) {
+            log.warn("Invalid wallet signature for wagered game", {
+              persistentID: persistentId,
+              gameID: clientMsg.gameID,
+            });
+            ws.close(1002, "Unauthorized: invalid wallet signature");
+            return;
+          }
+          if (ServerEnv.env() !== GameEnv.Dev) {
+            const wager = matchRegistry.get(clientMsg.gameID)!;
+            const inMatch = await verifyOnchainMembership(
+              wager.matchPDA,
+              walletAddress,
+              clientMsg.onchainTxSig,
+            );
+            if (!inMatch) {
+              log.warn("On-chain entry fee not confirmed", {
+                persistentID: persistentId,
+                gameID: clientMsg.gameID,
+              });
+              ws.close(1002, "Unauthorized: entry fee not confirmed on-chain");
+              return;
+            }
+          }
+          walletRegistry.set(persistentId, walletAddress);
+          log.info("Wallet auth passed for wagered game", {
+            persistentID: persistentId,
+            gameID: clientMsg.gameID,
+            wallet: walletAddress.slice(0, 8),
           });
         }
 
