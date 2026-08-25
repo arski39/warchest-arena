@@ -36,6 +36,8 @@ import {
   AnalyticsRecord,
   ArchivedAnalyticsRecordSchema,
   GameInfo,
+  WagerInfo, // [ARENA]
+  WagerInfoSchema, // [ARENA]
 } from "../core/Schemas";
 import { getAuthHeader, getPlayToken, logOut, userAuth } from "./Auth";
 import { ClientEnv } from "./ClientEnv";
@@ -867,6 +869,73 @@ export async function setLobbyListed(
     };
   } catch (e) {
     console.error("setLobbyListed: request failed", e);
+    return { ok: false };
+  }
+}
+
+// [ARENA] GET /api/game/:id, read for its wager fields. `available` says the
+// deployment can escrow at all (ARENA_PROGRAM_ID and a server keypair are
+// configured); `wager` is present once a stake is attached. Both false/absent
+// on any failure, which hides the control rather than offering one that cannot
+// work.
+export async function fetchLobbyWager(
+  gameID: string,
+): Promise<{ available: boolean; wager?: WagerInfo }> {
+  try {
+    const res = await fetch(
+      `${ClientEnv.serverHttpBase()}/${ClientEnv.workerPath(gameID)}/api/game/${gameID}`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return { available: false };
+    const json = await res.json();
+    const parsed = WagerInfoSchema.safeParse(json?.wager);
+    return {
+      available: json?.wagerAvailable === true,
+      ...(parsed.success ? { wager: parsed.data } : {}),
+    };
+  } catch (e) {
+    console.warn("fetchLobbyWager: request failed", e);
+    return { available: false };
+  }
+}
+
+// [ARENA] POST /api/game/:id/wager on the game server (worker) — creates the
+// on-chain escrow for a private lobby and marks it wagered. Creator-only and
+// server-authoritative; the server holds the match authority key, so the client
+// never signs this. One-shot: the stake is baked into the match PDA, so the
+// server rejects a second call rather than stranding anyone who already staked.
+// On failure, `error` is the server's rejection code when available (e.g.
+// "wager_not_configured", "wager_already_set", "wager_private_lobbies_only").
+export async function setLobbyWager(
+  gameID: string,
+  // No rakeBps: the house cut is a server-side operator setting.
+  wager: { mint: string; entryFee: string; maxPlayers: number },
+): Promise<{ ok: true; wager: WagerInfo } | { ok: false; error?: string }> {
+  try {
+    const token = await getPlayToken();
+    const response = await fetch(
+      `${ClientEnv.serverHttpBase()}/${ClientEnv.workerPath(gameID)}/api/game/${gameID}/wager`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(wager),
+      },
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { ok: false, error: body?.error };
+    }
+    const parsed = WagerInfoSchema.safeParse(body);
+    if (!parsed.success) {
+      console.error("setLobbyWager: malformed server response", body);
+      return { ok: false };
+    }
+    return { ok: true, wager: parsed.data };
+  } catch (e) {
+    console.error("setLobbyWager: request failed", e);
     return { ok: false };
   }
 }

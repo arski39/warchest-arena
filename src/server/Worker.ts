@@ -1,3 +1,4 @@
+import { PublicKey } from "@solana/web3.js"; // [ARENA]
 import compression from "compression";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -29,7 +30,8 @@ import { logger } from "./Logger";
 import { enforceVerifiedBadge } from "./Privilege";
 
 import { verifyWalletSig } from "./arena/auth";
-import { matchRegistry } from "./arena/matchRegistry";
+import { createWageredMatch, wageringConfigured } from "./arena/matchCreator";
+import { matchRegistry, toWagerInfo } from "./arena/matchRegistry";
 import { verifyOnchainMembership } from "./arena/rpcClient";
 import { walletRegistry } from "./arena/walletRegistry";
 import { MapPlaylist } from "./MapPlaylist";
@@ -310,6 +312,14 @@ export async function startWorker() {
         return res.status(409).json({ error: "listing_host_cheats_enabled" });
       }
 
+      // [ARENA] Wagered lobbies stay private in v1. The wager endpoint already
+      // refuses a listed lobby; without this the host could just do it in the
+      // other order and recruit strangers into a staked match whose winner is
+      // decided by client-majority vote (see CLAUDE.md).
+      if (matchRegistry.isWagered(game.id)) {
+        return res.status(409).json({ error: "listing_wager_enabled" });
+      }
+
       // Dev has no subscription backend; skip the check so the feature is
       // testable locally (same precedent as Turnstile).
       if (ServerEnv.env() !== GameEnv.Dev) {
@@ -357,13 +367,119 @@ export async function startWorker() {
     });
   });
 
+  // [ARENA] Attach an on-chain wager to a private lobby. Creator-only, and
+  // only before the game starts. Creating the escrow is what registers the
+  // lobby as wagered, so this is also the point where the join gate below
+  // starts demanding a wallet signature.
+  //
+  // Private lobbies only for v1: winner determination rests on client-majority
+  // consensus (see CLAUDE.md), which is only defensible among players the host
+  // invited. A publicly listed lobby is not.
+  app.post("/api/game/:id/wager", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(400).json({ error: "Authorization header required" });
+    }
+    const auth = await verifyClientToken(
+      authHeader.substring("Bearer ".length),
+    );
+    if (auth.type !== "success") {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    // No rakeBps here on purpose: the house cut is an operator setting
+    // (ARENA_RAKE_BPS), not something a lobby host gets to choose.
+    const parsed = z
+      .object({
+        // A u64 of token base units. String, not number: entry fees above 2^53
+        // would silently round through JSON.
+        entryFee: z
+          .string()
+          .regex(/^\d+$/)
+          .refine((s) => {
+            const n = BigInt(s);
+            return n > 0n && n <= 0xffffffffffffffffn;
+          }, "entryFee must be a non-zero u64"),
+        mint: z.string().refine((s) => {
+          try {
+            new PublicKey(s);
+            return true;
+          } catch {
+            return false;
+          }
+        }, "mint must be a base58 address"),
+        maxPlayers: z.number().int().min(2).max(16),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: z.prettifyError(parsed.error) });
+    }
+    const { entryFee, mint, maxPlayers } = parsed.data;
+
+    const game = gm.game(req.params.id);
+    if (game === null) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+    if (!game.isCreator(auth.persistentId)) {
+      return res
+        .status(403)
+        .json({ error: "Only the lobby creator can set a wager" });
+    }
+    if (game.isPublic() || game.isListed()) {
+      return res.status(409).json({ error: "wager_private_lobbies_only" });
+    }
+    if (game.hasStarted()) {
+      return res.status(409).json({ error: "wager_game_already_started" });
+    }
+    // The escrow is created once and its stake is baked into the PDA. Changing
+    // it would strand anyone who already staked into the old match.
+    if (matchRegistry.isWagered(game.id)) {
+      return res.status(409).json({ error: "wager_already_set" });
+    }
+    if (!wageringConfigured()) {
+      return res.status(503).json({ error: "wager_not_configured" });
+    }
+
+    try {
+      const wager = await createWageredMatch(game.id, {
+        mint,
+        entryFee: BigInt(entryFee),
+        maxPlayers,
+      });
+      log.info("wager escrow created", {
+        gameID: game.id,
+        matchPDA: wager.matchPDA,
+      });
+      return res.json(toWagerInfo(wager));
+    } catch (e) {
+      // A failed create_match leaves nothing registered, so the lobby stays
+      // free-to-play rather than advertising a stake with no escrow behind it.
+      log.error(
+        `wager escrow creation failed: ${e instanceof Error ? e.message : String(e)}`,
+        { gameID: game.id },
+      );
+      return res.status(502).json({ error: "wager_creation_failed" });
+    }
+  });
+
   app.get("/api/game/:id", async (req, res) => {
     const game = gm.game(req.params.id);
     if (game === null) {
       log.info(`lobby ${req.params.id} not found`);
       return res.status(404).json({ error: "Game not found" });
     }
-    res.json(game.gameInfo());
+    // [ARENA] Wager info rides along so a joining player can see the stake
+    // before connecting. Kept out of GameServer.gameInfo() because the registry
+    // is worker-local arena state, not part of the game's own config.
+    // `wagerAvailable` tells the host UI whether to offer the control at all —
+    // a deployment without ARENA_PROGRAM_ID cannot escrow anything, and a
+    // wager button that always fails is worse than no button.
+    const wager = matchRegistry.get(game.id);
+    res.json({
+      ...game.gameInfo(),
+      wagerAvailable: wageringConfigured(),
+      ...(wager !== undefined ? { wager: toWagerInfo(wager) } : {}),
+    });
   });
 
   registerGamePreviewRoute({
@@ -665,7 +781,10 @@ export async function startWorker() {
             ws.close(1002, "Unauthorized: token missing jti for wagered game");
             return;
           }
-          if (!walletAddress || !verifyWalletSig(jti, walletAddress, clientMsg.walletSig)) {
+          if (
+            !walletAddress ||
+            !verifyWalletSig(jti, walletAddress, clientMsg.walletSig)
+          ) {
             log.warn("Invalid wallet signature for wagered game", {
               persistentID: persistentId,
               gameID: clientMsg.gameID,

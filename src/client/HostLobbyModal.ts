@@ -24,9 +24,16 @@ import {
   GameConfig,
   LobbyInfoEvent,
   TeamCountConfig,
+  WagerInfo, // [ARENA]
   isValidGameID,
 } from "../core/Schemas";
-import { createLobby, getUserMe, setLobbyListed } from "./Api";
+import {
+  createLobby,
+  fetchLobbyWager, // [ARENA]
+  getUserMe,
+  setLobbyListed,
+  setLobbyWager, // [ARENA]
+} from "./Api";
 import "./components/baseComponents/Modal";
 import { BaseModal } from "./components/BaseModal";
 import "./components/ConfirmDialog";
@@ -113,6 +120,20 @@ export class HostLobbyModal extends BaseModal {
   @state() private showSubscriptionRequired: boolean = false;
   // Server timestamp when the listed lobby auto-starts (from lobby info).
   @state() private autoStartAt: number | null = null;
+
+  // [ARENA] On-chain wager. `wagerAvailable` comes from the server — a
+  // deployment without an arena program configured never shows the control.
+  // `wager` is set once the escrow exists, at which point it is read-only:
+  // the stake is baked into the match PDA and changing it would strand anyone
+  // who already staked.
+  @state() private wagerAvailable: boolean = false;
+  @state() private wager: WagerInfo | null = null;
+  @state() private wagerEnabled: boolean = false;
+  @state() private wagerMint: string = "";
+  @state() private wagerEntryFee: string = "";
+  @state() private wagerMaxPlayers: number = 16;
+  @state() private wagerRequestInFlight: boolean = false;
+  @state() private wagerError: string | null = null;
 
   @property({ attribute: false }) eventBus: EventBus | null = null;
   // Timers for debouncing slider changes
@@ -275,6 +296,175 @@ export class HostLobbyModal extends BaseModal {
       >${renderDuration(seconds)}</span
     >`;
   }
+
+  // [ARENA] Optional on-chain stake for this lobby. Hidden entirely unless the
+  // server reports it can escrow, and unavailable on a listed lobby — wagered
+  // games are private-only in v1 (the server enforces both; this just keeps the
+  // UI from offering something that would be rejected).
+  private renderWagerPanel() {
+    if (!this.wagerAvailable || this.publiclyListed) return nothing;
+
+    const attached = this.wager !== null;
+    const fieldClass =
+      "w-full rounded bg-black/30 border border-white/10 px-2 py-1 text-sm text-white " +
+      "placeholder:text-white/30 disabled:opacity-50";
+
+    return html`
+      <section class="mt-10">
+        <h3 class="text-white/80 text-sm font-bold uppercase tracking-widest">
+          ${translateText("host_modal.wager_title")}
+        </h3>
+        <p class="text-white/50 text-xs mt-1">
+          ${translateText("host_modal.wager_description")}
+        </p>
+
+        <label class="flex items-center gap-2 mt-3 text-sm text-white/80">
+          <input
+            type="checkbox"
+            .checked=${this.wagerEnabled || attached}
+            ?disabled=${attached || this.wagerRequestInFlight}
+            @change=${(e: Event) => {
+              this.wagerEnabled = (e.target as HTMLInputElement).checked;
+              this.wagerError = null;
+            }}
+          />
+          ${translateText("host_modal.wager_enable")}
+        </label>
+
+        ${this.wagerEnabled || attached
+          ? html`
+              <div class="grid gap-3 mt-3 sm:grid-cols-3">
+                <label class="text-xs text-white/60">
+                  ${translateText("host_modal.wager_mint")}
+                  <input
+                    class=${fieldClass}
+                    type="text"
+                    .value=${this.wager?.mint ?? this.wagerMint}
+                    ?disabled=${attached || this.wagerRequestInFlight}
+                    placeholder=${translateText(
+                      "host_modal.wager_mint_placeholder",
+                    )}
+                    @input=${(e: Event) => {
+                      this.wagerMint = (
+                        e.target as HTMLInputElement
+                      ).value.trim();
+                    }}
+                  />
+                </label>
+                <label class="text-xs text-white/60">
+                  ${translateText("host_modal.wager_entry_fee")}
+                  <input
+                    class=${fieldClass}
+                    type="text"
+                    inputmode="numeric"
+                    .value=${this.wager?.entryFee ?? this.wagerEntryFee}
+                    ?disabled=${attached || this.wagerRequestInFlight}
+                    placeholder=${translateText(
+                      "host_modal.wager_entry_fee_placeholder",
+                    )}
+                    @input=${(e: Event) => {
+                      this.wagerEntryFee = (
+                        e.target as HTMLInputElement
+                      ).value.trim();
+                    }}
+                  />
+                </label>
+                <label class="text-xs text-white/60">
+                  ${translateText("host_modal.wager_max_players")}
+                  <input
+                    class=${fieldClass}
+                    type="number"
+                    min="2"
+                    max="16"
+                    .value=${String(
+                      this.wager?.maxPlayers ?? this.wagerMaxPlayers,
+                    )}
+                    ?disabled=${attached || this.wagerRequestInFlight}
+                    @change=${(e: Event) => {
+                      this.wagerMaxPlayers = Number(
+                        (e.target as HTMLInputElement).value,
+                      );
+                    }}
+                  />
+                </label>
+              </div>
+
+              ${attached
+                ? html`<p class="text-emerald-300 text-xs mt-3 break-all">
+                    ${translateText("host_modal.wager_attached", {
+                      pda: this.wager!.matchPDA,
+                    })}
+                  </p>`
+                : html`<o-button
+                    class="mt-3 inline-block"
+                    variant="secondary"
+                    size="sm"
+                    .title=${this.wagerRequestInFlight
+                      ? translateText("host_modal.wager_attaching")
+                      : translateText("host_modal.wager_attach")}
+                    ?disable=${this.wagerRequestInFlight}
+                    @click=${this.handleAttachWager}
+                  ></o-button>`}
+              ${this.wagerError !== null
+                ? html`<p class="text-red-400 text-xs mt-2">
+                    ${this.wagerError}
+                  </p>`
+                : nothing}
+            `
+          : nothing}
+      </section>
+    `;
+  }
+
+  // [ARENA] Ask the server whether it can escrow, and whether this lobby
+  // already has a stake attached (true for a lobby rejoined after a reload).
+  private async loadWagerState(): Promise<void> {
+    if (!this.lobbyId) return;
+    const state = await fetchLobbyWager(this.lobbyId);
+    this.wagerAvailable = state.available;
+    this.wager = state.wager ?? null;
+  }
+
+  private handleAttachWager = async () => {
+    if (this.wagerRequestInFlight || this.wager !== null || !this.lobbyId) {
+      return;
+    }
+    if (
+      !/^\d+$/.test(this.wagerEntryFee) ||
+      BigInt(this.wagerEntryFee) === 0n
+    ) {
+      this.wagerError = translateText("host_modal.wager_error_entry_fee");
+      return;
+    }
+    if (this.wagerMint === "") {
+      this.wagerError = translateText("host_modal.wager_error_mint");
+      return;
+    }
+
+    this.wagerRequestInFlight = true;
+    this.wagerError = null;
+    try {
+      const result = await setLobbyWager(this.lobbyId, {
+        mint: this.wagerMint,
+        entryFee: this.wagerEntryFee,
+        maxPlayers: this.wagerMaxPlayers,
+      });
+      if (result.ok) {
+        this.wager = result.wager;
+      } else {
+        // Server rejection codes are stable identifiers, not prose; map the
+        // ones a host can act on and fall back to a generic message.
+        const key = `host_modal.wager_error_${result.error ?? "generic"}`;
+        const translated = translateText(key);
+        this.wagerError =
+          translated === key
+            ? translateText("host_modal.wager_error_generic")
+            : translated;
+      }
+    } finally {
+      this.wagerRequestInFlight = false;
+    }
+  };
 
   private handleVisibilitySelect(isPublic: boolean) {
     if (
@@ -592,6 +782,8 @@ export class HostLobbyModal extends BaseModal {
             @unit-toggle-changed=${this.handleConfigUnitToggleChanged}
           ></game-config-settings>
 
+          ${this.renderWagerPanel()}
+
           <lobby-player-view
             class="mt-10"
             .gameMode=${this.gameMode}
@@ -684,6 +876,7 @@ export class HostLobbyModal extends BaseModal {
           throw new Error(`Invalid lobby ID format: ${this.lobbyId}`);
         }
         crazyGamesSDK.showInviteButton(this.lobbyId);
+        void this.loadWagerState(); // [ARENA]
 
         // Now that we have the id, build and copy the share link. If lobby
         // creation fails, the catch below clears the clipboard.
@@ -722,6 +915,7 @@ export class HostLobbyModal extends BaseModal {
     }
     this.lobbyId = lobbyId;
     crazyGamesSDK.showInviteButton(this.lobbyId);
+    void this.loadWagerState(); // [ARENA]
 
     const url = await this.constructUrl();
     this.updateLobbyHistory(url);

@@ -1,28 +1,12 @@
 import { createHash } from "crypto";
-import fs from "fs";
 import nacl from "tweetnacl";
 import { GameEnv } from "../../core/configuration/Config";
 import type { ClientSendWinnerMessage } from "../../core/Schemas";
 import type { Client } from "../Client";
 import { ServerEnv } from "../ServerEnv";
 import { matchRegistry } from "./matchRegistry";
+import { serverKeypair } from "./serverKeypair";
 import { walletRegistry } from "./walletRegistry";
-
-// Server ed25519 keypair; pubkey is baked into the Anchor program config.
-// Path must point to a Uint8Array JSON file ([...bytes]).
-function loadServerKeypair(): Uint8Array {
-  const path = process.env.SERVER_KEYPAIR_PATH;
-  if (!path) {
-    throw new Error("SERVER_KEYPAIR_PATH env var not set");
-  }
-  return new Uint8Array(JSON.parse(fs.readFileSync(path, "utf8")) as number[]);
-}
-
-let _keypair: Uint8Array | null = null;
-function keypair(): Uint8Array {
-  if (!_keypair) _keypair = loadServerKeypair();
-  return _keypair;
-}
 
 /**
  * Signs sha256(gameID || winnerWallet || standings) and submits the
@@ -84,7 +68,9 @@ export async function settle(
     return;
   }
 
-  const sig = nacl.sign.detached(digest, keypair());
+  // Same key that created the match, which is what settle_match verifies
+  // against `match_account.authority`.
+  const sig = nacl.sign.detached(digest, serverKeypair().secretKey);
 
   console.log(
     `[arena/settler] game=${gameId} winner=${winnerWallet} ` +

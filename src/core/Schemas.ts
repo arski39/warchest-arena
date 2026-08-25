@@ -238,6 +238,24 @@ const ClientInfoSchema = z.object({
   teamIndex: z.number().int().nonnegative().optional(),
 });
 
+// [ARENA] On-chain escrow attached to a wagered lobby. Server-owned (only
+// /api/game/:id/wager sets it) and exposed on GET /api/game/:id so a joining
+// player can see the stake before connecting.
+//
+// entryFee is a u64 of token base units, which JSON cannot carry as a number
+// without losing precision above 2^53, so it crosses the wire as a decimal
+// string. The vault is the PDA-owned ATA that actually holds the stakes — the
+// server never custodies them.
+export const WagerInfoSchema = z.object({
+  matchPDA: z.string(),
+  vault: z.string(),
+  mint: z.string(),
+  entryFee: z.string().regex(/^\d+$/),
+  maxPlayers: z.number().int().min(2).max(16),
+  rakeBps: z.number().int().min(0).max(1000),
+});
+export type WagerInfo = z.infer<typeof WagerInfoSchema>;
+
 export const GameInfoSchema = z.object({
   gameID: z.string(),
   clients: z.array(ClientInfoSchema).optional(),
@@ -259,6 +277,8 @@ export const GameInfoSchema = z.object({
   label: LobbyLabelSchema.optional(),
   accent: LobbyAccentSchema.optional(),
   featured: z.boolean().optional(),
+  // [ARENA] Set only on wagered private lobbies. Absent means free-to-play.
+  wager: WagerInfoSchema.optional(),
 });
 
 // Browser-facing lobby info. Master/worker-internal fields (the creator hash
