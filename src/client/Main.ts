@@ -878,7 +878,7 @@ class Client {
     // @solana/web3.js, ~300 kB that no free-to-play join has any use for. This
     // is the first line that knows the lobby is actually wagered.
     const { promptWagerJoin } = await import("./arena/wagerJoinFlow");
-    const staked = await promptWagerJoin(wager);
+    const staked = await promptWagerJoin(lobby.gameID, wager);
     if (staked === null) return "cancelled";
     return staked;
   }

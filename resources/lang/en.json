@@ -1815,19 +1815,19 @@
     "verified_toggle": "Verified"
   },
   "wager_lobby": {
-    "title": "Wagered match",
+    "cancel": "Back out",
+    "connect_wallet": "Connect wallet",
     "description": "Your stake is transferred into an on-chain escrow that only the program can pay out. The winner is paid automatically when the match ends.",
     "entry_fee": "Your stake",
-    "max_players": "Staked players",
-    "winner_takes": "Winner receives",
-    "mint": "Token",
-    "connect_wallet": "Connect wallet",
+    "error_generic": "Could not stake into this match. Please try again.",
     "join_and_stake": "Join & stake",
-    "cancel": "Back out",
+    "max_players": "Staked players",
+    "mint": "Token",
+    "status_confirming": "Confirming...",
     "status_signing": "Approve the signature...",
     "status_staking": "Confirming the stake...",
-    "status_confirming": "Confirming...",
-    "error_generic": "Could not stake into this match. Please try again."
+    "title": "Wagered match",
+    "winner_takes": "Winner receives"
   },
   "win_modal": {
     "died": "You died",

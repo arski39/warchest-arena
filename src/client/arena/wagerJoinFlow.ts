@@ -17,6 +17,7 @@ import {
  * reported inside the panel and the player can retry or cancel.
  */
 export function promptWagerJoin(
+  gameId: string,
   wager: WagerInfo,
 ): Promise<WagerJoinedDetail | null> {
   const overlay = document.createElement("div");
@@ -33,6 +34,7 @@ export function promptWagerJoin(
 
   const panel = document.createElement("arena-wager-lobby") as WagerLobby;
   panel.wager = wager;
+  panel.gameId = gameId;
   overlay.appendChild(panel);
 
   return new Promise<WagerJoinedDetail | null>((resolve) => {

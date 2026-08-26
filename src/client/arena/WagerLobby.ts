@@ -32,6 +32,8 @@ export interface WagerJoinedDetail {
 @customElement("arena-wager-lobby")
 export class WagerLobby extends LitElement {
   @property({ type: Object }) wager: WagerInfo | null = null;
+  /** Needed for the dev auth nonce; see core/arena/authMessage.ts. */
+  @property({ type: String }) gameId = "";
   @state() private walletAddress: string | null = null;
   @state() private busy = false;
   @state() private status: string | null = null;
@@ -76,6 +78,7 @@ export class WagerLobby extends LitElement {
       this.status = translateText("wager_lobby.status_signing");
       const { walletAddress, walletSig } = await signAuthMessage(
         await getPlayToken(),
+        this.gameId,
       );
 
       this.status = translateText("wager_lobby.status_staking");

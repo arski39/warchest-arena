@@ -29,7 +29,7 @@ import { getUserMe, verifyClientToken } from "./jwt";
 import { logger } from "./Logger";
 import { enforceVerifiedBadge } from "./Privilege";
 
-import { verifyWalletSig } from "./arena/auth";
+import { verifyWalletSig, walletAuthNonce } from "./arena/auth";
 import { createWageredMatch, wageringConfigured } from "./arena/matchCreator";
 import { matchRegistry, toWagerInfo } from "./arena/matchRegistry";
 import { verifyOnchainMembership } from "./arena/rpcClient";
@@ -782,15 +782,18 @@ export async function startWorker() {
         // [ARENA] Wallet auth — only enforced for wagered games.
         // In dev mode the on-chain check is skipped (mirrors Turnstile bypass above).
         if (matchRegistry.isWagered(clientMsg.gameID)) {
-          const jti = claims?.jti;
           const walletAddress = clientMsg.walletAddress;
-          if (!jti) {
+          // Normally the JWT's jti. Dev sessions are anonymous and have none,
+          // so walletAuthNonce substitutes the game id there — without which
+          // the wagered path cannot be exercised locally at all.
+          const nonce = walletAuthNonce(claims, clientMsg.gameID);
+          if (nonce === undefined) {
             ws.close(1002, "Unauthorized: token missing jti for wagered game");
             return;
           }
           if (
             !walletAddress ||
-            !verifyWalletSig(jti, walletAddress, clientMsg.walletSig)
+            !verifyWalletSig(nonce, walletAddress, clientMsg.walletSig)
           ) {
             log.warn("Invalid wallet signature for wagered game", {
               persistentID: persistentId,
