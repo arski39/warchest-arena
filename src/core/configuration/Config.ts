@@ -41,6 +41,10 @@ declare global {
       // requires a modified version offered over a network to offer its
       // corresponding source to the people using it; the footer link is how.
       sourceRepoUrl?: string;
+      // [ARENA] Whether the server resolved its dev bypass to ON. Absent means
+      // off. The client needs the *resolved* value, not its own guess at it,
+      // or it would prompt for a signature the server is about to reject.
+      arenaDevBypass?: boolean;
     };
   }
 }

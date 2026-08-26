@@ -30,7 +30,17 @@ import { logger } from "./Logger";
 import { enforceVerifiedBadge } from "./Privilege";
 
 import { verifyWalletSig, walletAuthNonce } from "./arena/auth";
-import { createWageredMatch, wageringConfigured } from "./arena/matchCreator";
+import {
+  devBypassEnabled,
+  logBypassUse,
+  resolveDevBypass,
+} from "./arena/devBypass"; // [ARENA]
+import {
+  arenaMaxEntryFee,
+  createWageredMatch,
+  entryFeeWithinCap,
+  wageringConfigured,
+} from "./arena/matchCreator";
 import { matchRegistry, toWagerInfo } from "./arena/matchRegistry";
 import { verifyOnchainMembership } from "./arena/rpcClient";
 import { walletRegistry } from "./arena/walletRegistry";
@@ -52,6 +62,12 @@ const playlist = new MapPlaylist();
 // Worker setup
 export async function startWorker() {
   log.info(`Worker starting...`);
+
+  // [ARENA] Module state is per-process, so each worker resolves for itself.
+  // Before any join can be served: devBypassEnabled() reads false until this
+  // completes, and a join that raced it would take the strict path — safe, but
+  // confusing enough in dev to be worth ordering properly.
+  await resolveDevBypass();
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -439,6 +455,16 @@ export async function startWorker() {
     if (!wageringConfigured()) {
       return res.status(503).json({ error: "wager_not_configured" });
     }
+    // [ARENA] Operator ceiling on the stake. Checked here rather than in the
+    // program: the escrow is equally sound at any size, so this is policy, and
+    // the accepted-risk posture ("no raised stake limits while the winner is
+    // client-voted") had nothing enforcing it until now.
+    if (!entryFeeWithinCap(BigInt(entryFee))) {
+      return res.status(409).json({
+        error: "wager_entry_fee_too_high",
+        maxEntryFee: arenaMaxEntryFee()?.toString(),
+      });
+    }
     // Attaching a wager is what turns the join gate on, so anyone already
     // connected got in without staking and cannot be made to retroactively.
     // The creator's own connection is expected (their join fires when the
@@ -802,7 +828,13 @@ export async function startWorker() {
             ws.close(1002, "Unauthorized: invalid wallet signature");
             return;
           }
-          if (ServerEnv.env() !== GameEnv.Dev) {
+          // [ARENA] Gated on the resolved bypass, not GameEnv.Dev: skipping
+          // this in dev alone let a dev server pointed at a real cluster seat
+          // players who never paid, filling the escrow to InProgress with a
+          // partial pot that then settles for real tokens.
+          if (devBypassEnabled()) {
+            logBypassUse("on-chain stake check", clientMsg.gameID);
+          } else {
             const wager = matchRegistry.get(clientMsg.gameID)!;
             // Reads the escrow's players[] rather than the tx signature the
             // client sent: the program only writes a wallet there after the

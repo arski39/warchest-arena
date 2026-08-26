@@ -67,6 +67,49 @@ export function arenaRakeBps(): number {
   return parsed;
 }
 
+/**
+ * [ARENA] Ceiling on a single seat's stake, in token base units, or null for
+ * no ceiling. Operator-set like the rake — a lobby host must not be able to
+ * raise the house's exposure.
+ *
+ * Exists because the accepted-risk section of CLAUDE.md says not to raise
+ * stake limits while winner determination is still client-voted, and until now
+ * there was no limit to raise: the program bounds `rake_bps` and `max_players`
+ * but leaves `entry_fee` unbounded, and the endpoint accepted any non-zero u64.
+ *
+ * Server-side rather than on-chain on purpose. It is policy, not fund safety —
+ * the escrow is equally sound at any stake — and a compiled-in constant could
+ * not be denominated sensibly anyway, since the cap is meaningless without the
+ * mint's decimals.
+ */
+export function arenaMaxEntryFee(): bigint | null {
+  const raw = process.env.ARENA_MAX_ENTRY_FEE;
+  if (!raw) return null;
+  if (!/^\d+$/.test(raw)) {
+    throw new WagerUnavailableError(
+      `ARENA_MAX_ENTRY_FEE must be a non-negative integer, got "${raw}"`,
+    );
+  }
+  const parsed = BigInt(raw);
+  if (parsed <= 0n) {
+    throw new WagerUnavailableError(
+      `ARENA_MAX_ENTRY_FEE must be greater than zero, got "${raw}"`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Whether a proposed stake is allowed. `true` when no ceiling is configured.
+ *
+ * Split out from the endpoint so the boundary — at the cap is fine, one above
+ * is not — is testable without standing up express.
+ */
+export function entryFeeWithinCap(entryFee: bigint): boolean {
+  const cap = arenaMaxEntryFee();
+  return cap === null || entryFee <= cap;
+}
+
 export interface CreateWageredMatchInput {
   mint: string;
   entryFee: bigint;

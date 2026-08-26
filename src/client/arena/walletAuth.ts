@@ -1,5 +1,4 @@
 import { authMessage, devAuthNonce } from "../../core/arena/authMessage";
-import { GameEnv } from "../../core/configuration/Config";
 import { ClientEnv } from "../ClientEnv";
 import {
   connectWallet,
@@ -50,9 +49,15 @@ function toBase64(bytes: Uint8Array): string {
  *
  * The nonce is the token's `jti`. Dev sessions are anonymous and have no JWT,
  * so there is no `jti` to bind to; the server accepts the game id instead when
- * it is in dev, and this mirrors that choice. Outside dev a missing `jti` is
- * fatal, and failing here rather than after the wallet prompt means the player
- * is not asked to sign something that cannot be accepted.
+ * its dev bypass is in force, and this mirrors that choice.
+ *
+ * It mirrors the server's **resolved** answer (`ClientEnv.arenaDevBypass()`),
+ * not `env() === Dev`: the server additionally requires `ARENA_DEV_BYPASS` and
+ * a cluster it can prove is not mainnet, so guessing from the client's own
+ * environment would prompt the wallet for a signature that then gets rejected.
+ * Without the bypass a missing `jti` is fatal, and failing here rather than
+ * after the prompt means the player is not asked to sign something that cannot
+ * be accepted.
  */
 export async function signAuthMessage(
   token: string,
@@ -62,7 +67,7 @@ export async function signAuthMessage(
   let nonce: string;
   if (jti !== null) {
     nonce = jti;
-  } else if (ClientEnv.env() === GameEnv.Dev) {
+  } else if (ClientEnv.arenaDevBypass()) {
     nonce = devAuthNonce(gameId);
   } else {
     throw new Error("Cannot verify this session: sign in to play for stakes.");

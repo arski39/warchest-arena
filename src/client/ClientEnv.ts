@@ -47,6 +47,8 @@ export class ClientEnv {
       serverHost: bc.serverHost,
       // [ARENA] Optional: unset deployments fall back to upstream below.
       sourceRepoUrl: bc.sourceRepoUrl,
+      // [ARENA] Absent means off — never assume a bypass we were not told about.
+      arenaDevBypass: bc.arenaDevBypass ?? false,
     };
     return ClientEnv.values;
   }
@@ -80,6 +82,18 @@ export class ClientEnv {
    * non-dev server leaves SOURCE_REPO_URL unset, because this fork is by
    * definition modified.
    */
+  /**
+   * [ARENA] Whether the server has the arena dev bypass in force.
+   *
+   * Must be the server's *resolved* answer rather than `env() === Dev`: the
+   * server also requires ARENA_DEV_BYPASS to be set and the cluster to be
+   * provably not mainnet, so a dev client guessing from its own environment
+   * would prompt the wallet for a signature the server then rejects. Stage 6's
+   * rule — never ask anyone to sign something that cannot be accepted.
+   */
+  static arenaDevBypass(): boolean {
+    return ClientEnv.get().arenaDevBypass;
+  }
   static sourceRepoUrl(): string {
     // Empty, not just absent: the server sends "" for an unset
     // SOURCE_REPO_URL, and ?? would let that through as href="" -- which
@@ -229,4 +243,5 @@ export interface ClientEnvValues {
   gitCommit: string;
   serverHost?: string;
   sourceRepoUrl?: string;
+  arenaDevBypass: boolean;
 }

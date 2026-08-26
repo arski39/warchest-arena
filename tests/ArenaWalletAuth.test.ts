@@ -24,7 +24,7 @@ function verify(nonce: string, walletKey: Uint8Array, sigBase64: string) {
 
 const GAME_ID = "abcd1234";
 
-function setEnv(gameEnv: "dev" | "prod") {
+function setEnv(gameEnv: "dev" | "prod", arenaDevBypass = false) {
   (window as any).BOOTSTRAP_CONFIG = {
     gameEnv,
     numWorkers: 1,
@@ -32,6 +32,10 @@ function setEnv(gameEnv: "dev" | "prod") {
     jwtAudience: "localhost",
     instanceId: "desktop",
     gitCommit: "test",
+    // [ARENA] The server's *resolved* answer, not something the client infers.
+    // Being in dev is no longer sufficient — the server also needs
+    // ARENA_DEV_BYPASS set and a cluster it can prove is not mainnet.
+    arenaDevBypass,
   };
   ClientEnv.reset();
 }
@@ -86,8 +90,8 @@ describe("arena wallet auth", () => {
     expect(verify(devAuthNonce(GAME_ID), kp.publicKey, walletSig)).toBe(false);
   });
 
-  it("falls back to the game id for anonymous dev sessions", async () => {
-    setEnv("dev");
+  it("falls back to the game id when the server says the bypass is on", async () => {
+    setEnv("dev", true);
     const kp = mockWallet();
     const { signAuthMessage: sign } =
       await import("../src/client/arena/walletAuth");
@@ -112,8 +116,23 @@ describe("arena wallet auth", () => {
     const { signAuthMessage: sign } =
       await import("../src/client/arena/walletAuth");
 
-    // The bypass is dev-only. Failing before the wallet prompt means the player
-    // is never asked to sign something the server is going to reject.
+    // Failing before the wallet prompt means the player is never asked to sign
+    // something the server is going to reject.
+    await expect(
+      sign("0f9a8b7c-6d5e-4f3a-2b1c-0d9e8f7a6b5c", GAME_ID),
+    ).rejects.toThrow(/sign in/i);
+  });
+
+  it("refuses in dev too when the server has the bypass off", async () => {
+    // The case that made this flag necessary. A dev client that assumed dev
+    // implies bypass would prompt the wallet, get a signature over the game id,
+    // and have the server reject it as unauthorised — a confusing disconnect
+    // after an interaction the player should never have been asked for.
+    setEnv("dev", false);
+    mockWallet();
+    const { signAuthMessage: sign } =
+      await import("../src/client/arena/walletAuth");
+
     await expect(
       sign("0f9a8b7c-6d5e-4f3a-2b1c-0d9e8f7a6b5c", GAME_ID),
     ).rejects.toThrow(/sign in/i);
@@ -133,15 +152,36 @@ describe("arena wallet auth", () => {
     expect(ClientEnv.env()).not.toBe(GameEnv.Dev);
   });
 
-  it("server-side, the nonce prefers jti and only then falls back", () => {
+  it("the bypass flag is independent of the environment", () => {
+    // They were the same thing before Phase 2, and conflating them is exactly
+    // what let a dev server pointed at a real cluster seat unpaid players.
+    setEnv("dev", false);
+    expect(ClientEnv.env()).toBe(GameEnv.Dev);
+    expect(ClientEnv.arenaDevBypass()).toBe(false);
+  });
+
+  it("defaults the bypass off when the server sends no flag at all", () => {
+    // An older shell, or a render that forgot the variable. Absent must never
+    // read as permission.
+    (window as any).BOOTSTRAP_CONFIG = {
+      gameEnv: "dev",
+      numWorkers: 1,
+      turnstileSiteKey: "x",
+      jwtAudience: "localhost",
+      instanceId: "desktop",
+      gitCommit: "test",
+    };
+    ClientEnv.reset();
+    expect(ClientEnv.arenaDevBypass()).toBe(false);
+  });
+
+  it("server-side, the nonce always prefers a real jti", () => {
     // The server half of the same choice the client makes above. Both must pick
-    // identically or the signature verifies against the wrong message.
+    // identically or the signature verifies against the wrong message. The
+    // fallback branch depends on the resolved bypass and is covered in
+    // tests/server/ArenaDevBypass.test.ts, which can mock the cluster.
     expect(walletAuthNonce({ jti: "session-nonce" } as never, GAME_ID)).toBe(
       "session-nonce",
     );
-    // ServerEnv reads GAME_ENV at import time and vitest runs as dev, so this
-    // exercises the bypass branch. The prod branch is covered by the client
-    // test above, which is the side that refuses first.
-    expect(walletAuthNonce(null, GAME_ID)).toBe(devAuthNonce(GAME_ID));
   });
 });

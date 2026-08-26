@@ -2,8 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import nacl from "tweetnacl";
 import type { TokenPayload } from "../../core/ApiSchemas";
 import { authMessage, devAuthNonce } from "../../core/arena/authMessage";
-import { GameEnv } from "../../core/configuration/Config";
-import { ServerEnv } from "../ServerEnv";
+import { devBypassEnabled, logBypassUse } from "./devBypass";
 
 /**
  * Returns true when the wallet identified by walletAddress (base58) signed
@@ -38,17 +37,25 @@ export function verifyWalletSig(
  * [ARENA] The nonce this session's wallet signature must cover, or undefined if
  * the session cannot produce one and the join must be refused.
  *
- * Prefers the JWT's `jti`. Falls back to the game id **in dev only**, where
- * anonymous sessions have no JWT and therefore no `jti` — see devAuthNonce.
- * This mirrors the dev bypass already applied to the on-chain membership check
- * a few lines below the caller, and the one in jwt.ts that lets a raw
- * persistentID stand in for a token in the first place.
+ * Prefers the JWT's `jti`, which binds the signature to one login session.
+ * Falls back to the game id only when the dev bypass is in force — anonymous
+ * dev sessions have no JWT and therefore no `jti` (see devAuthNonce), so
+ * without the fallback the wagered path cannot be exercised locally at all.
+ * What the fallback gives up is the session binding, which is exactly why it
+ * is gated rather than free.
+ *
+ * Gated on devBypassEnabled(), not `GameEnv.Dev`: being in dev is no longer
+ * sufficient, because a dev server pointed at a real cluster could otherwise
+ * seat unpaid players in a match that settles for real tokens.
  */
 export function walletAuthNonce(
   claims: TokenPayload | null,
   gameId: string,
 ): string | undefined {
   if (claims?.jti) return claims.jti;
-  if (ServerEnv.env() === GameEnv.Dev) return devAuthNonce(gameId);
+  if (devBypassEnabled()) {
+    logBypassUse("wallet-auth nonce", gameId);
+    return devAuthNonce(gameId);
+  }
   return undefined;
 }

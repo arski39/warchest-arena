@@ -2,6 +2,7 @@ import ejs from "ejs";
 import type { Response } from "express";
 import fs from "fs/promises";
 import { buildAssetUrl } from "../core/AssetUrls";
+import { devBypassEnabled } from "./arena/devBypass"; // [ARENA]
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { getRuntimeAssetManifest } from "./RuntimeAssetManifest";
 import { ServerEnv } from "./ServerEnv";
@@ -34,6 +35,7 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
     siteOrigin: ServerEnv.siteOrigin(),
     siteName: ServerEnv.siteName(),
     sourceRepoUrl: JSON.stringify(ServerEnv.sourceRepoUrl()),
+    arenaDevBypass: JSON.stringify(devBypassEnabled()),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(

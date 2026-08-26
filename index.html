@@ -84,7 +84,8 @@
         turnstileSiteKey: <%- turnstileSiteKey %>,
         jwtAudience: <%- jwtAudience %>,
         instanceId: <%- instanceId %>,
-        sourceRepoUrl: <%- sourceRepoUrl %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
+        sourceRepoUrl: <%- sourceRepoUrl %>,
+        arenaDevBypass: <%- arenaDevBypass %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
       };
       document.documentElement.style.setProperty(
         "--background-image-url",

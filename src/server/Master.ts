@@ -6,6 +6,7 @@ import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import { GameEnv } from "../core/configuration/Config";
+import { resolveDevBypass } from "./arena/devBypass"; // [ARENA]
 import { getDescriptor } from "./DesktopRelease";
 import { logger } from "./Logger";
 import { MapPlaylist } from "./MapPlaylist";
@@ -131,6 +132,11 @@ export async function startMaster() {
   log.info(`Instance ID: ${INSTANCE_ID}`);
 
   ServerEnv.warnIfSourceRepoUnset(log); // [ARENA] AGPL v3 section 13
+
+  // [ARENA] Before serving anything: the master renders the app shell, and the
+  // resolved value is baked into BOOTSTRAP_CONFIG so the client agrees with us
+  // about which nonce it should sign.
+  await resolveDevBypass();
 
   // Fork workers
   for (let i = 0; i < ServerEnv.numWorkers(); i++) {
