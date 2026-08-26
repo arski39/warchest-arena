@@ -252,11 +252,21 @@ async function payOut(
   matchRegistry.unregister(gameId);
 }
 
-async function refund(
-  gameId: string,
-  wager: WagerConfig,
+/**
+ * Cancels an escrow and hands every staker their stake back, returning the
+ * confirmed transaction signature.
+ *
+ * Takes chain state and nothing else — no game id, no registry entry — because
+ * the H2 sweeper calls it for orphans whose lobby died with the worker process
+ * that held them. Keeping one implementation of "how to refund an escrow"
+ * matters more than the small awkwardness of the signature: the players[]-order
+ * pairing below is the kind of detail that goes wrong quietly in a second copy.
+ */
+export async function cancelAndRefund(
+  programId: PublicKey,
+  matchPda: PublicKey,
   match: MatchAccountView,
-): Promise<void> {
+): Promise<string> {
   const authority = serverKeypair();
 
   // cancel_match pairs remaining_accounts[i] with stakes[i], so these must be
@@ -268,19 +278,34 @@ async function refund(
     await ensureTokenAccount(account, match.players[i]!, match.mint);
   }
 
-  const txSig = await sendAndConfirmTransaction(
+  return await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
       buildCancelMatchIx({
-        programId: new PublicKey(wager.programId),
+        programId,
         authority: authority.publicKey,
-        matchPda: new PublicKey(wager.matchPDA),
-        vault: new PublicKey(wager.vault),
+        matchPda,
+        // From chain rather than from the registry: the program pins this with
+        // `address = match_account.vault`, so this is the only value that can
+        // ever succeed, and the sweeper has no registry entry to read anyway.
+        vault: match.vault,
         refundTokenAccounts,
       }),
     ),
     [authority],
     { commitment: "confirmed" },
+  );
+}
+
+async function refund(
+  gameId: string,
+  wager: WagerConfig,
+  match: MatchAccountView,
+): Promise<void> {
+  const txSig = await cancelAndRefund(
+    new PublicKey(wager.programId),
+    new PublicKey(wager.matchPDA),
+    match,
   );
   console.log(
     `[arena/settler] refunded game=${gameId} to ${match.players.length} stakers tx=${txSig}`,

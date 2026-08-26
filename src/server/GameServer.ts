@@ -22,6 +22,7 @@ import {
   Intent,
   LiveStats,
   LobbyAccent,
+  MAX_GAME_DURATION_MS, // [ARENA]
   PlayerLiveStats,
   PlayerRecord,
   PublicGameType,
@@ -125,7 +126,9 @@ export class GameServer {
 
   private intentRateLimiter = new ClientMsgRateLimiter();
 
-  private maxGameDuration = 3 * 60 * 60 * 1000; // 3 hours
+  // [ARENA] Hoisted to Schemas.ts so the arena sweeper can derive its own
+  // window from the same number rather than hand-copying it.
+  private maxGameDuration = MAX_GAME_DURATION_MS;
 
   private disconnectedTimeout = 1 * 30 * 1000; // 30 seconds
 

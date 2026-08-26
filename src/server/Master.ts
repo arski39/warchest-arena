@@ -7,6 +7,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { GameEnv } from "../core/configuration/Config";
 import { resolveDevBypass } from "./arena/devBypass"; // [ARENA]
+import { runWagerPreflight } from "./arena/preflight"; // [ARENA]
+import { startSweeper } from "./arena/sweeper"; // [ARENA]
 import { getDescriptor } from "./DesktopRelease";
 import { logger } from "./Logger";
 import { MapPlaylist } from "./MapPlaylist";
@@ -176,6 +178,18 @@ export async function startMaster() {
       `Restarted worker ${workerId} (New PID: ${newWorker.process.pid})`,
     );
   });
+
+  // [ARENA] H2: recover escrows orphaned by a crash or redeploy. Deliberately
+  // here and not in startWorker() — the workers hold the match registry, but N
+  // of them sweeping means N cancel_match transactions per orphan. The master
+  // supervises them, shares their env and therefore their keypair, and reads
+  // only chain state, so it is the one process that can do this once.
+  //
+  // After the fork loop so the master's RPC round-trips do not delay worker
+  // startup, and its own preflight because it is about to sign transactions:
+  // startSweeper() is a no-op unless that preflight passed.
+  await runWagerPreflight();
+  startSweeper();
 
   const PORT = 3000;
   server.listen(PORT, () => {

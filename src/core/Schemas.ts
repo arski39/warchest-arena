@@ -194,6 +194,14 @@ export const HOSTED_LOBBY_AUTO_START_MS = 5 * 60 * 1000;
 // player-hosted lobby.
 export const FEATURED_LOBBY_AUTO_START_MS = 10 * 60 * 1000;
 
+// [ARENA] Hard kill for any game, lobby or active: phase() reports Finished
+// past this and GameManager.tick() then calls end(). Hoisted out of
+// GameServer's private field because the arena sweeper has to outlast it —
+// an escrow is only an orphan once no GameServer can still be managing it —
+// and a hand-copied "3 hours" in two files is exactly the drift that would
+// make the sweeper refund a live lobby.
+export const MAX_GAME_DURATION_MS = 3 * 60 * 60 * 1000;
+
 // Labels are capped by CODE POINT, matching sanitizeLobbyLabel. z.string().max()
 // counts UTF-16 code units, so it would reject a legal 48-emoji label (96 units)
 // before the sanitiser ever saw it.
