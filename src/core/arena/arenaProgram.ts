@@ -42,6 +42,21 @@ export const MAX_PLAYERS = 16;
 export const MAX_RAKE_BPS = 1000;
 
 /**
+ * How long after `created_at` an `InProgress` match may be force-cancelled,
+ * in seconds. `MATCH_TIMEOUT_SECS` in programs/arena/src/state.rs.
+ *
+ * The recovery window for a filled match whose server died before settling:
+ * `settle_match` needs a winner nobody can supply, so before the timeout that
+ * pot has no on-chain path out at all. A sweeper deciding when to attempt
+ * `cancel_match` reads this — too low and it spams transactions the program
+ * rejects, too high and it leaves money locked longer than it must.
+ *
+ * Marked `#[constant]` in Rust so it reaches the IDL, and diffed against it in
+ * tests/arenaProgram.ts rather than trusted as a hand-copied number.
+ */
+export const MATCH_TIMEOUT_SECS = 86_400;
+
+/**
  * Anchor instruction discriminators, verbatim from the IDL.
  *
  * These are `sha256("global:" + name)[0..8]` where `name` is the **snake_case**
