@@ -807,8 +807,19 @@ export async function startWorker() {
             // Reads the escrow's players[] rather than the tx signature the
             // client sent: the program only writes a wallet there after the
             // entry fee has landed in the vault.
-            const inMatch = await verifyOnchainMembership(wager, walletAddress);
-            if (!inMatch) {
+            const check = await verifyOnchainMembership(wager, walletAddress);
+            // Cache the fill state whether or not this player passed. A join is
+            // the only moment it can change, and the start-gate cannot afford
+            // its own RPC (GameServer.handleIntent is synchronous).
+            if (check.match !== null) {
+              matchRegistry.recordChainState(clientMsg.gameID, {
+                status: check.match.status,
+                playerCount: check.match.playerCount,
+                maxPlayers: check.match.maxPlayers,
+                observedAt: Date.now(),
+              });
+            }
+            if (!check.isMember) {
               log.warn("On-chain entry fee not confirmed", {
                 persistentID: persistentId,
                 gameID: clientMsg.gameID,

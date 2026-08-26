@@ -921,7 +921,8 @@
     "duplicate_session": "Kicked from game (you may have been playing on another tab)",
     "host_left": "The host has left the lobby.",
     "lobby_creator": "Kicked by lobby creator",
-    "match_cancelled": "Match cancelled: a player failed to connect. You have not lost any ELO."
+    "match_cancelled": "Match cancelled: a player failed to connect. You have not lost any ELO.",
+    "wager_not_full": "Every staked seat must be filled before this match can start. A wagered match that starts with empty seats cannot pay out."
   },
   "lang": {
     "en": "English",

@@ -1,6 +1,4 @@
 import { createHash } from "crypto";
-// [ARENA]
-import { settle as arenaSettle } from "./arena/settler";
 import ipAnonymize from "ip-anonymize";
 import { Logger } from "winston";
 import WebSocket from "ws";
@@ -44,6 +42,10 @@ import {
   simpleHash,
 } from "../core/Util";
 import { archive, finalizeGameRecord } from "./Archive";
+// [ARENA]
+import { matchRegistry, wagerReadyToStart } from "./arena/matchRegistry";
+// [ARENA]
+import { settle as arenaSettle } from "./arena/settler";
 import { Client } from "./Client";
 import { ClientMsgRateLimiter } from "./ClientMsgRateLimiter";
 import { fetchCustomTribes } from "./CustomTribes";
@@ -89,6 +91,10 @@ const KICK_REASON_LOBBY_CREATOR = "kick_reason.lobby_creator";
 const KICK_REASON_ADMIN = "kick_reason.admin";
 const KICK_REASON_HOST_LEFT = "kick_reason.host_left";
 const KICK_REASON_MATCH_CANCELLED = "kick_reason.match_cancelled";
+// [ARENA] Distinct from match_cancelled on purpose: that reason makes the
+// client re-enter the matchmaking queue, which is wrong for a private
+// wagered lobby the host set up by hand.
+const KICK_REASON_WAGER_NOT_FULL = "kick_reason.wager_not_full";
 const KICK_REASON_TOO_MUCH_DATA = "kick_reason.too_much_data";
 
 // Messages that speak for a player in the simulation, so a spectator may not
@@ -655,6 +661,26 @@ export class GameServer {
         if (this.hasStarted()) {
           return finish({ status: 409, error: "game already started" });
         }
+        // [ARENA] A wagered lobby that starts with unstaked seats can never be
+        // paid out: join_match only flips the escrow to InProgress once the
+        // last seat is staked, and settle_match accepts nothing else. Starting
+        // anyway would guarantee a refund for a match that was actually played.
+        // Disarming (startsAt already set) is always allowed.
+        if (!this.startsAt && !wagerReadyToStart(this.id)) {
+          const state = matchRegistry.chainState(this.id);
+          this.log.info("blocked start of an underfilled wagered lobby", {
+            gameID: this.id,
+            staked: state?.playerCount ?? 0,
+            seats: state?.maxPlayers ?? null,
+          });
+          this.allClients.get(actor.clientID)?.ws.send(
+            JSON.stringify({
+              type: "error",
+              error: "wager_lobby_not_full",
+            } satisfies ServerErrorMessage),
+          );
+          return finish({ status: 409, error: "wager_lobby_not_full" });
+        }
         if (this.startsAt) {
           this.startsAt = undefined;
         } else {
@@ -1196,6 +1222,48 @@ export class GameServer {
     return true;
   }
 
+  // [ARENA] Releases the stakes of a wagered lobby that never started. Safe to
+  // call for any game: settle() returns immediately when the id is not in the
+  // registry, and only acts on an escrow the chain reports as Open.
+  private refundWageredLobby(): void {
+    if (!matchRegistry.isWagered(this.id)) return;
+    this.log.info("refunding stakes for a wagered lobby that never started", {
+      gameID: this.id,
+    });
+    arenaSettle(this.id, null, this.allClients).catch((e: unknown) =>
+      this.log.error("[arena] refund failed", {
+        gameID: this.id,
+        error: String(e),
+      }),
+    );
+  }
+
+  // [ARENA] Mirrors cancelShortHandedMatch for wagered lobbies whose start
+  // timer fires with seats still unstaked. The start-gate in handleIntent
+  // should already have prevented this, so reaching here means the cached fill
+  // state was stale — starting anyway would guarantee a refund for a match that
+  // was played, which is a worse outcome than cancelling before it begins.
+  //
+  // Deliberately does not refund inline: setting _hasEnded makes phase() report
+  // Finished, GameManager then calls end(), and end()'s not-started branch is
+  // the single place the refund is issued. One refund site, not two.
+  public cancelUnfilledWageredMatch(): boolean {
+    if (wagerReadyToStart(this.id)) {
+      return false;
+    }
+    const state = matchRegistry.chainState(this.id);
+    this.log.warn("cancelling wagered game, seats unstaked at deadline", {
+      gameID: this.id,
+      staked: state?.playerCount ?? 0,
+      seats: state?.maxPlayers ?? null,
+    });
+    for (const c of [...this.activeClients]) {
+      this.kickClient(c.clientID, KICK_REASON_WAGER_NOT_FULL);
+    }
+    this._hasEnded = true;
+    return true;
+  }
+
   public prestart() {
     if (this.hasStarted()) {
       return;
@@ -1645,6 +1713,13 @@ export class GameServer {
     });
     if (!this._hasPrestarted && !this._hasStarted) {
       this.log.info(`game not started, not archiving game`);
+      // [ARENA] Settlement normally rides on archiveGame(), which this early
+      // return skips — so without this, an abandoned or cancelled wagered lobby
+      // leaves every stake sitting in the vault with nothing left to release
+      // it. settle() reads the escrow itself and refunds via cancel_match only
+      // when the chain says Open, so a match that did somehow reach InProgress
+      // is left alone rather than guessed at.
+      this.refundWageredLobby();
       this.emitMatchFinished();
       return;
     }

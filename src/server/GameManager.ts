@@ -139,8 +139,14 @@ export class GameManager {
       }
       if (phase === GamePhase.Active) {
         // A matchmade game missing a player at the start deadline is
-        // cancelled instead of started short-handed.
-        if (!game.hasStarted() && !game.cancelShortHandedMatch()) {
+        // cancelled instead of started short-handed. [ARENA] A wagered lobby
+        // with unstaked seats likewise: it could only ever refund, so it is
+        // cancelled before it is played rather than after.
+        if (
+          !game.hasStarted() &&
+          !game.cancelShortHandedMatch() &&
+          !game.cancelUnfilledWageredMatch()
+        ) {
           // Prestart tells clients to start loading the game.
           game.prestart();
           // Start game on delay to allow time for clients to connect.

@@ -40,6 +40,18 @@ export async function fetchMatchAccount(
 const MEMBERSHIP_RETRIES = 3;
 const MEMBERSHIP_RETRY_DELAY_MS = 400;
 
+export interface MembershipCheck {
+  /** The wallet is recorded in `players[]` — proof the entry fee landed. */
+  isMember: boolean;
+  /**
+   * The escrow as last read, when a well-formed one was visible. Returned even
+   * when `isMember` is false: it is chain truth either way, and the caller
+   * caches it to answer "is this lobby fully staked?" without a second RPC
+   * from the synchronous start-gate path.
+   */
+  match: MatchAccountView | null;
+}
+
 /**
  * [ARENA] Whether `walletAddress` is enrolled in the escrow — that is, whether
  * the program itself recorded the wallet in `players[]`, which it only does
@@ -53,14 +65,15 @@ const MEMBERSHIP_RETRY_DELAY_MS = 400;
 export async function verifyOnchainMembership(
   wager: WagerConfig,
   walletAddress: string,
-): Promise<boolean> {
+): Promise<MembershipCheck> {
   let wallet: PublicKey;
   try {
     wallet = new PublicKey(walletAddress);
   } catch {
-    return false;
+    return { isMember: false, match: null };
   }
 
+  let lastSeen: MatchAccountView | null = null;
   for (let attempt = 0; attempt < MEMBERSHIP_RETRIES; attempt++) {
     if (attempt > 0) {
       await new Promise((r) => setTimeout(r, MEMBERSHIP_RETRY_DELAY_MS));
@@ -77,7 +90,7 @@ export async function verifyOnchainMembership(
           e instanceof Error ? e.message : String(e)
         }`,
       );
-      return false;
+      return { isMember: false, match: null };
     }
     if (match === null) continue; // not visible on this node yet
 
@@ -88,11 +101,13 @@ export async function verifyOnchainMembership(
       match.status !== MatchStatus.Open &&
       match.status !== MatchStatus.InProgress
     ) {
-      return false;
+      return { isMember: false, match };
     }
     // The escrow the registry points at must be the one the lobby advertised.
     // A mismatch means server state and chain state have diverged; refusing is
-    // the only safe reading, since the stake may sit in a different pot.
+    // the only safe reading, since the stake may sit in a different pot. The
+    // view is not returned: it describes a different escrow than this lobby's,
+    // so caching it would let the start-gate reason about the wrong pot.
     if (
       match.entryFee !== wager.entryFee ||
       match.mint.toBase58() !== wager.mint ||
@@ -101,14 +116,20 @@ export async function verifyOnchainMembership(
       console.error(
         `[arena/rpcClient] match ${wager.matchPDA} does not match the registry entry`,
       );
-      return false;
+      return { isMember: false, match: null };
     }
 
     // players[] is populated only up to player_count, and only by the program
     // after token::transfer succeeded — so presence here is proof of payment.
-    if (match.players.some((p) => p.equals(wallet))) return true;
+    if (match.players.some((p) => p.equals(wallet))) {
+      return { isMember: true, match };
+    }
+    // Absent is not final: a node briefly behind shows the account without this
+    // player's join yet, which is the exact case the retry loop exists for.
+    // Keep the view so a caller still learns the fill state we did observe.
+    lastSeen = match;
   }
-  return false;
+  return { isMember: false, match: lastSeen };
 }
 
 export { connection };

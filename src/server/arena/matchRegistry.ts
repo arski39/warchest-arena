@@ -1,3 +1,5 @@
+import { MatchStatus } from "../../core/arena/arenaProgram";
+
 export interface WagerConfig {
   matchPDA: string; // base58 Solana account address
   vault: string; // [ARENA] base58 PDA-owned ATA holding the staked tokens
@@ -55,8 +57,27 @@ export function toWagerInfo(config: WagerConfig): WagerInfo {
   };
 }
 
+/**
+ * [ARENA] The escrow's fill state, as last read from chain by the join gate.
+ *
+ * Cached rather than fetched on demand because the only consumer — the
+ * start-gate in GameServer.handleIntent — is synchronous and cannot await an
+ * RPC. The join gate already performs this read for every wagered join, which
+ * is also the only moment the fill state can change, so the cache is refreshed
+ * exactly when it needs to be.
+ */
+export interface ObservedChainState {
+  status: MatchStatus;
+  playerCount: number;
+  maxPlayers: number;
+  observedAt: number;
+}
+
 // gameID → on-chain wager config; set at lobby creation, cleared after settlement.
 const registry = new Map<string, WagerConfig>();
+// gameID → last observed escrow fill state. Separate map so a stale observation
+// can never be mistaken for a registration.
+const observed = new Map<string, ObservedChainState>();
 
 export const matchRegistry = {
   register(gameId: string, config: WagerConfig): void {
@@ -70,5 +91,33 @@ export const matchRegistry = {
   },
   unregister(gameId: string): void {
     registry.delete(gameId);
+    observed.delete(gameId);
+  },
+
+  /** Records what the join gate just read from chain. */
+  recordChainState(gameId: string, state: ObservedChainState): void {
+    observed.set(gameId, state);
+  },
+  chainState(gameId: string): ObservedChainState | undefined {
+    return observed.get(gameId);
   },
 };
+
+/**
+ * [ARENA] Whether this lobby is allowed to start. True for any lobby that is
+ * not wagered.
+ *
+ * The predicate is the escrow's own `InProgress` status, which `join_match`
+ * sets exactly when the last seat is staked — and which is precisely what
+ * `settle_match` requires. Gating on the same condition the program settles on
+ * means the two cannot drift: a lobby this lets start is a lobby that can pay
+ * out, and one it blocks is one that could only ever have refunded.
+ *
+ * Wrong in either direction is safe. Blocking a startable match costs the host
+ * a retry; allowing an unstartable one still refunds through settler.ts. That
+ * is what makes a cached read acceptable here.
+ */
+export function wagerReadyToStart(gameId: string): boolean {
+  if (!registry.has(gameId)) return true;
+  return observed.get(gameId)?.status === MatchStatus.InProgress;
+}

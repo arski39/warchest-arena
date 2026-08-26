@@ -264,6 +264,39 @@ export function joinLobby(
             },
           }),
         );
+      } else if (message.error === "wager_lobby_not_full") {
+        // [ARENA] The host pressed start before every staked seat was filled.
+        // Recoverable and expected while players are still staking, so a toast
+        // rather than the error modal — and the lobby stays open.
+        window.dispatchEvent(
+          new CustomEvent("show-message", {
+            detail: {
+              message: translateText("kick_reason.wager_not_full"),
+              color: "red",
+              duration: 5000,
+            },
+          }),
+        );
+      } else if (message.error === "kick_reason.wager_not_full") {
+        // [ARENA] The start deadline passed with seats still unstaked, so the
+        // server cancelled rather than play a match that could only refund.
+        // Unlike match_cancelled this must NOT requeue: the lobby was private.
+        document.dispatchEvent(
+          new CustomEvent("leave-lobby", {
+            detail: { lobby: lobbyConfig.gameID, cause: "wager-not-full" },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        window.dispatchEvent(
+          new CustomEvent("show-message", {
+            detail: {
+              message: translateText("kick_reason.wager_not_full"),
+              color: "red",
+              duration: 8000,
+            },
+          }),
+        );
       } else {
         showErrorModal(
           message.error,
