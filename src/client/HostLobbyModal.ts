@@ -451,6 +451,22 @@ export class HostLobbyModal extends BaseModal {
       });
       if (result.ok) {
         this.wager = result.wager;
+        // [ARENA] The host is a player too, and must stake like everyone
+        // else. Their join-lobby fired at lobby creation, before this escrow
+        // existed, so they are connected without a stake. Re-dispatching runs
+        // them back through Main.ts's join funnel, which now finds the wager
+        // and puts up the stake gate. The server rejects the wager outright if
+        // anyone else has already joined, so nobody else is stranded unstaked.
+        this.dispatchEvent(
+          new CustomEvent("join-lobby", {
+            detail: {
+              gameID: this.lobbyId,
+              source: "host",
+            } as JoinLobbyEvent,
+            bubbles: true,
+            composed: true,
+          }),
+        );
       } else {
         // Server rejection codes are stable identifiers, not prose; map the
         // ones a host can act on and fall back to a generic message.

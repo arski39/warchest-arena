@@ -253,6 +253,14 @@ export const WagerInfoSchema = z.object({
   entryFee: z.string().regex(/^\d+$/),
   maxPlayers: z.number().int().min(2).max(16),
   rakeBps: z.number().int().min(0).max(1000),
+  // The joining browser builds and submits its own join_match transaction, so
+  // it needs both of these. programId is recorded per-match rather than read
+  // from config at join time: an operator who repoints ARENA_PROGRAM_ID must
+  // not strand escrows created under the previous one.
+  programId: z.string(),
+  // Public RPC endpoint. See ARENA_PUBLIC_RPC_URL in example.env — this value
+  // reaches every joining browser, so it must not carry an API key.
+  rpcUrl: z.string(),
 });
 export type WagerInfo = z.infer<typeof WagerInfoSchema>;
 

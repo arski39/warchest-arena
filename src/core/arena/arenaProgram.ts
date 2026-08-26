@@ -1,15 +1,22 @@
 // [ARENA] new file — hand-rolled bindings to the Anchor `arena` escrow program.
 //
+// Lives in core/ rather than server/ because both halves ship: the server
+// builds create_match and settle_match, the browser builds join_match. Nothing
+// under src/client/ may import from src/server/, so this is the shared home.
+//
 // Every constant here is transcribed from the generated `target/idl/arena.json`
 // (Anchor 0.31 format). Nothing is guessed: `tests/arenaProgram.ts` at the
 // project root diffs all of it against that IDL on every `anchor test` run, so
 // a program change that shifts a discriminator or a field offset fails the
 // suite instead of silently producing a transaction the chain rejects.
 //
-// Why not `@coral-xyz/anchor`: the client half of this file (Stage 3's
-// join_match) ships to the browser, and pulling Anchor's coder in for four
-// instructions is a large bundle for no benefit. Keep this module free of Node
-// built-ins and of OpenFrontIO imports — the root test imports it directly.
+// Why not `@coral-xyz/anchor`: this module ships to the browser, and pulling
+// Anchor's coder in for four instructions is a large bundle for no benefit.
+// Keep it free of OpenFrontIO imports (the root test imports it across the repo
+// boundary) and of Node built-ins. `buffer` is the one exception and is not
+// really an exception: web3.js types instruction data as `Buffer`, and the npm
+// `buffer` package resolves in the browser while Node prefers its own builtin
+// for the same bare specifier.
 
 import {
   PublicKey,
@@ -17,6 +24,7 @@ import {
   SYSVAR_RENT_PUBKEY,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { Buffer } from "buffer";
 
 export const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -234,4 +242,40 @@ export function buildCreateMatchIx(params: CreateMatchParams): {
   });
 
   return { ix, matchPda, vault };
+}
+
+export interface JoinMatchParams {
+  programId: PublicKey;
+  /** Signs and pays the entry fee. Appended to `match_account.players[]`. */
+  player: PublicKey;
+  matchPda: PublicKey;
+  /** `match_account.vault`; the program pins it with `address = ...`. */
+  vault: PublicKey;
+  /** The player's own token account for the match mint. */
+  playerToken: PublicKey;
+}
+
+/**
+ * Builds `join_match`. Takes no args — the amount transferred is
+ * `match_account.entry_fee`, read on-chain, so a client cannot understake.
+ *
+ * Account order matches the IDL exactly: player, match_account, vault,
+ * player_token, token_program. Data is the bare 8-byte discriminator.
+ */
+export function buildJoinMatchIx(
+  params: JoinMatchParams,
+): TransactionInstruction {
+  const { programId, player, matchPda, vault, playerToken } = params;
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: player, isSigner: true, isWritable: true },
+      { pubkey: matchPda, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: playerToken, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(IX_DISCRIMINATOR.join_match),
+  });
 }

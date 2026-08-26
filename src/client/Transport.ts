@@ -442,6 +442,11 @@ export class Transport {
       turnstileToken: this.lobbyConfig.turnstileToken,
       token: await getPlayToken(),
       spectator: this.lobbyConfig.spectator,
+      // [ARENA] Undefined for ordinary lobbies; the server only looks at these
+      // when the game is registered as wagered.
+      walletAddress: this.lobbyConfig.walletAddress,
+      walletSig: this.lobbyConfig.walletSig,
+      onchainTxSig: this.lobbyConfig.onchainTxSig,
     } satisfies ClientJoinMessage);
   }
 

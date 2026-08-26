@@ -102,6 +102,12 @@ export interface LobbyConfig {
   gameRecord?: GameRecord;
   // Watch without playing.
   spectator?: boolean;
+  // [ARENA] Wagered lobbies only, produced by the stake gate in
+  // arena/wagerJoinFlow.ts. Sent verbatim in ClientJoinMessage; the server
+  // rejects the join if the signature or the on-chain stake does not check out.
+  walletAddress?: string;
+  walletSig?: string;
+  onchainTxSig?: string;
 }
 
 export interface JoinLobbyResult {

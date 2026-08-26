@@ -1,31 +1,40 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import type { WagerInfo } from "../../core/Schemas";
+import { getPlayToken } from "../Auth";
+import { translateText } from "../Utils";
 import { connectWallet, getConnectedWallet } from "./WalletProvider";
 import { joinMatchOnChain } from "./onchainJoin";
-
-export interface WagerInfo {
-  matchPDA: string;
-  mint: string;
-  entryFee: bigint;
-  maxPlayers: number;
-  currentPlayers: number;
-}
+import { signAuthMessage } from "./walletAuth";
 
 /** Emitted when the player has connected their wallet and paid the entry fee. */
 export const WAGER_JOINED_EVENT = "arena-wager-joined";
+/** Emitted when the player backs out instead of staking. */
+export const WAGER_CANCELLED_EVENT = "arena-wager-cancelled";
+
+export interface WagerJoinedDetail {
+  walletAddress: string;
+  /** base64 ed25519 signature over the canonical auth message. */
+  walletSig: string;
+  /** Confirmed join_match transaction signature. */
+  onchainTxSig: string;
+}
 
 /**
- * Pre-game lobby UI showing stakes, pot size, and the "Join & Stake" button.
- * Mount alongside the existing OpenFront lobby for wagered games.
+ * Pre-game gate for a wagered lobby: shows the stake, then walks the player
+ * through connect → sign auth → stake on-chain. Mounted by wagerJoinFlow.ts,
+ * which resolves once one of the two events above fires.
  *
- * Usage:
- *   <arena-wager-lobby .wager=${wagerInfo}></arena-wager-lobby>
+ * Both the wallet signature and the on-chain stake are produced here because
+ * the server checks them together, in the same ClientJoinMessage: the signature
+ * proves the wallet belongs to this session, the transaction proves it staked.
  */
 @customElement("arena-wager-lobby")
 export class WagerLobby extends LitElement {
   @property({ type: Object }) wager: WagerInfo | null = null;
   @state() private walletAddress: string | null = null;
-  @state() private txPending = false;
+  @state() private busy = false;
+  @state() private status: string | null = null;
   @state() private error: string | null = null;
 
   connectedCallback() {
@@ -35,72 +44,118 @@ export class WagerLobby extends LitElement {
   }
 
   private async handleConnect() {
+    this.busy = true;
     try {
       const wallet = await connectWallet();
       this.walletAddress = wallet.publicKey;
       this.error = null;
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Wallet connection failed";
+    } finally {
+      this.busy = false;
     }
+  }
+
+  private handleCancel() {
+    if (this.busy) return;
+    this.dispatchEvent(
+      new CustomEvent(WAGER_CANCELLED_EVENT, {
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private async handleJoin() {
     if (!this.wager || !this.walletAddress) return;
-    this.txPending = true;
+    this.busy = true;
     this.error = null;
     try {
-      const txSig = await joinMatchOnChain({
+      // Sign first. It is the cheap step, and a player who declines the
+      // signature prompt should not have already spent their stake.
+      this.status = translateText("wager_lobby.status_signing");
+      const { walletAddress, walletSig } = await signAuthMessage(
+        await getPlayToken(),
+      );
+
+      this.status = translateText("wager_lobby.status_staking");
+      const onchainTxSig = await joinMatchOnChain({
+        programId: this.wager.programId,
+        rpcUrl: this.wager.rpcUrl,
         matchPDA: this.wager.matchPDA,
+        vault: this.wager.vault,
         mint: this.wager.mint,
-        entryFee: this.wager.entryFee,
+        entryFee: BigInt(this.wager.entryFee),
       });
+
       this.dispatchEvent(
-        new CustomEvent(WAGER_JOINED_EVENT, {
-          detail: { walletAddress: this.walletAddress, txSig },
+        new CustomEvent<WagerJoinedDetail>(WAGER_JOINED_EVENT, {
+          detail: { walletAddress, walletSig, onchainTxSig },
           bubbles: true,
           composed: true,
         }),
       );
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Transaction failed";
+      this.error =
+        e instanceof Error
+          ? e.message
+          : translateText("wager_lobby.error_generic");
+      this.status = null;
     } finally {
-      this.txPending = false;
+      this.busy = false;
     }
   }
 
   render() {
     if (!this.wager) return html``;
-    const { entryFee, maxPlayers, currentPlayers } = this.wager;
-    const pot = entryFee * BigInt(maxPlayers);
+    const { entryFee, maxPlayers, rakeBps } = this.wager;
+    const pot = BigInt(entryFee) * BigInt(maxPlayers);
+    const payout = pot - (pot * BigInt(rakeBps)) / 10000n;
 
     return html`
       <div class="wager-panel">
-        <div class="wager-header">Wagered Match</div>
+        <div class="wager-header">${translateText("wager_lobby.title")}</div>
+        <p class="wager-note">${translateText("wager_lobby.description")}</p>
+
         <div class="wager-row">
-          <span>Entry fee</span><span>${entryFee.toLocaleString()} units</span>
+          <span>${translateText("wager_lobby.entry_fee")}</span>
+          <span>${entryFee}</span>
         </div>
         <div class="wager-row">
-          <span>Pot</span><span>${pot.toLocaleString()} units</span>
+          <span>${translateText("wager_lobby.max_players")}</span>
+          <span>${maxPlayers}</span>
         </div>
         <div class="wager-row">
-          <span>Players</span><span>${currentPlayers} / ${maxPlayers}</span>
+          <span>${translateText("wager_lobby.winner_takes")}</span>
+          <span>${payout.toString()}</span>
+        </div>
+        <div class="wager-row muted">
+          <span>${translateText("wager_lobby.mint")}</span>
+          <span class="mono">${shorten(this.wager.mint)}</span>
         </div>
 
         ${this.walletAddress
           ? html`
-              <div class="wallet-info">
-                ${this.walletAddress.slice(0, 8)}…${this.walletAddress.slice(-4)}
-              </div>
-              <button
-                ?disabled=${this.txPending}
-                @click=${this.handleJoin}
-              >
-                ${this.txPending ? "Confirming…" : "Join & Stake"}
+              <div class="wallet-info mono">${shorten(this.walletAddress)}</div>
+              <button ?disabled=${this.busy} @click=${this.handleJoin}>
+                ${this.busy
+                  ? (this.status ??
+                    translateText("wager_lobby.status_confirming"))
+                  : translateText("wager_lobby.join_and_stake")}
               </button>
             `
           : html`
-              <button @click=${this.handleConnect}>Connect Wallet</button>
+              <button ?disabled=${this.busy} @click=${this.handleConnect}>
+                ${translateText("wager_lobby.connect_wallet")}
+              </button>
             `}
+        <button
+          class="secondary"
+          ?disabled=${this.busy}
+          @click=${this.handleCancel}
+        >
+          ${translateText("wager_lobby.cancel")}
+        </button>
         ${this.error ? html`<div class="error">${this.error}</div>` : ""}
       </div>
     `;
@@ -111,26 +166,41 @@ export class WagerLobby extends LitElement {
       background: #1a1a2e;
       border: 1px solid #e94560;
       border-radius: 8px;
-      padding: 1rem;
+      padding: 1.25rem;
       color: #eee;
       font-family: sans-serif;
-      min-width: 220px;
+      width: min(28rem, calc(100vw - 2rem));
+      box-sizing: border-box;
     }
     .wager-header {
       font-weight: bold;
       color: #e94560;
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .wager-note {
+      color: #aaa;
+      font-size: 0.8rem;
+      margin: 0 0 0.9rem;
+      line-height: 1.4;
     }
     .wager-row {
       display: flex;
       justify-content: space-between;
+      gap: 1rem;
       margin-bottom: 0.4rem;
       font-size: 0.9rem;
+    }
+    .wager-row.muted {
+      color: #888;
+      font-size: 0.8rem;
+    }
+    .mono {
+      font-family: ui-monospace, monospace;
     }
     .wallet-info {
       font-size: 0.8rem;
       color: #aaa;
-      margin: 0.5rem 0;
+      margin: 0.75rem 0 0;
     }
     button {
       width: 100%;
@@ -143,6 +213,12 @@ export class WagerLobby extends LitElement {
       font-size: 1rem;
       margin-top: 0.5rem;
     }
+    button.secondary {
+      background: transparent;
+      border: 1px solid #ffffff33;
+      color: #bbb;
+      font-size: 0.85rem;
+    }
     button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
@@ -150,7 +226,12 @@ export class WagerLobby extends LitElement {
     .error {
       color: #ff6b6b;
       font-size: 0.8rem;
-      margin-top: 0.5rem;
+      margin-top: 0.6rem;
+      overflow-wrap: anywhere;
     }
   `;
+}
+
+function shorten(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }

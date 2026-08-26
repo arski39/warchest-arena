@@ -2,9 +2,14 @@
 // Detects injected wallets via the Wallet Standard or legacy Phantom injection.
 // All wagered-game UI imports from here rather than touching wallet SDKs directly.
 
+import type { Transaction } from "@solana/web3.js";
+
 export interface WalletAdapter {
   publicKey: string; // base58
   signMessage(message: Uint8Array): Promise<Uint8Array>; // returns ed25519 signature
+  // [ARENA] Signs but does not submit: the caller sends the raw transaction
+  // itself so it controls confirmation and can surface the program's error.
+  signTransaction(transaction: Transaction): Promise<Transaction>;
   disconnect(): Promise<void>;
 }
 
@@ -17,6 +22,7 @@ type PhantomProvider = {
     message: Uint8Array,
     encoding: "utf8" | "hex",
   ): Promise<{ signature: Uint8Array }>;
+  signTransaction(transaction: Transaction): Promise<Transaction>;
 };
 
 function getPhantom(): PhantomProvider | null {
@@ -29,6 +35,18 @@ function getPhantom(): PhantomProvider | null {
 
 let _connected: WalletAdapter | null = null;
 
+function adapterFor(provider: PhantomProvider, pubkey: string): WalletAdapter {
+  return {
+    publicKey: pubkey,
+    signMessage: async (msg) => {
+      const result = await provider.signMessage(msg, "utf8");
+      return result.signature;
+    },
+    signTransaction: (tx) => provider.signTransaction(tx),
+    disconnect: () => provider.disconnect(),
+  };
+}
+
 export async function connectWallet(): Promise<WalletAdapter> {
   const provider = getPhantom();
   if (!provider) {
@@ -39,15 +57,7 @@ export async function connectWallet(): Promise<WalletAdapter> {
   await provider.connect();
   if (!provider.publicKey) throw new Error("Wallet connect failed");
 
-  const pubkey = provider.publicKey.toBase58();
-  _connected = {
-    publicKey: pubkey,
-    signMessage: async (msg) => {
-      const result = await provider.signMessage(msg, "utf8");
-      return result.signature;
-    },
-    disconnect: () => provider.disconnect(),
-  };
+  _connected = adapterFor(provider, provider.publicKey.toBase58());
   return _connected;
 }
 
@@ -61,14 +71,6 @@ export function mountWalletProvider(): void {
   if (!provider) return; // no wallet extension installed, silently skip
   // Phantom auto-connects on page load if authorized; pick up the existing session.
   if (provider.isConnected && provider.publicKey) {
-    const pubkey = provider.publicKey.toBase58();
-    _connected = {
-      publicKey: pubkey,
-      signMessage: async (msg) => {
-        const result = await provider.signMessage(msg, "utf8");
-        return result.signature;
-      },
-      disconnect: () => provider.disconnect(),
-    };
+    _connected = adapterFor(provider, provider.publicKey.toBase58());
   }
 }

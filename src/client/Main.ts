@@ -17,7 +17,7 @@ import { UserSettings } from "../core/game/UserSettings";
 import "./AccountModal";
 import { adGatekeeper } from "./AdGatekeeper";
 import { loadAdmiral, onAdmiralMeasured } from "./Admiral";
-import { getUserMe, invalidateUserMe } from "./Api";
+import { fetchLobbyWager, getUserMe, invalidateUserMe } from "./Api"; // [ARENA] fetchLobbyWager
 import { reauthAfterCrazyGamesChange, userAuth } from "./Auth";
 import "./ClanModal";
 import { joinLobby, type JoinLobbyResult } from "./ClientGameRunner";
@@ -848,10 +848,61 @@ class Client {
     return mode;
   }
 
+  // [ARENA] Runs the stake gate for a wagered lobby and returns the fields to
+  // put on LobbyConfig. Returns {} when the lobby is not wagered (the common
+  // case) and "cancelled" when the player backed out of staking.
+  private async resolveWagerJoin(lobby: JoinLobbyEvent): Promise<
+    | "cancelled"
+    | {
+        walletAddress?: string;
+        walletSig?: string;
+        onchainTxSig?: string;
+      }
+  > {
+    // Wagered lobbies are private-only (enforced server-side), and replays and
+    // singleplayer never touch a server lobby at all.
+    const isPrivate = lobby.source === "private" || lobby.source === "host";
+    if (
+      !isPrivate ||
+      lobby.spectator === true ||
+      lobby.gameRecord !== undefined ||
+      lobby.gameStartInfo !== undefined
+    ) {
+      return {};
+    }
+
+    const { wager } = await fetchLobbyWager(lobby.gameID);
+    if (wager === undefined) return {};
+
+    // Imported here, not at module scope: the stake gate pulls in
+    // @solana/web3.js, ~300 kB that no free-to-play join has any use for. This
+    // is the first line that knows the lobby is actually wagered.
+    const { promptWagerJoin } = await import("./arena/wagerJoinFlow");
+    const staked = await promptWagerJoin(wager);
+    if (staked === null) return "cancelled";
+    return staked;
+  }
+
   private async handleJoinLobby(event: CustomEvent<JoinLobbyEvent>) {
     const lobby = event.detail;
     this.mostRecentJoinEvent = event.timeStamp;
     if (this.usernameInput && !this.usernameInput.canPlay()) {
+      return;
+    }
+
+    // [ARENA] Wagered lobbies gate the join behind a wallet signature and an
+    // on-chain stake. Runs before anything is torn down: a player who backs out
+    // of the stake prompt stays in whatever they were already in, rather than
+    // being left disconnected with no lobby handle. Only private lobbies can be
+    // wagered and spectators do not stake, so everything else skips the lookup.
+    const wagerFields = await this.resolveWagerJoin(lobby);
+    if (wagerFields === "cancelled") {
+      console.log("join aborted: player declined the stake");
+      return;
+    }
+    // Staking is a wallet round-trip; a newer join may have started meanwhile.
+    if (this.mostRecentJoinEvent !== event.timeStamp) {
+      console.warn("Join requested, but was superseded");
       return;
     }
 
@@ -895,6 +946,7 @@ class Client {
           : undefined),
       gameRecord: lobby.gameRecord,
       spectator: lobby.spectator,
+      ...wagerFields, // [ARENA] empty unless this lobby is wagered
     });
 
     if (this.mostRecentJoinEvent !== event.timeStamp) {

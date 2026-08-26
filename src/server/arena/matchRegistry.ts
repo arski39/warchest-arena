@@ -6,6 +6,10 @@ export interface WagerConfig {
   maxPlayers: number;
   rakeBps: number; // [ARENA] house cut in basis points, 0..1000
   nonce: bigint; // [ARENA] PDA seed, so the address can be re-derived later
+  // [ARENA] The program this escrow was created under. Recorded per-match, not
+  // read from config at join time: repointing ARENA_PROGRAM_ID must not send a
+  // joining player's stake to a different program than the one holding the pot.
+  programId: string;
 }
 
 /**
@@ -20,6 +24,22 @@ export interface WagerInfo {
   entryFee: string;
   maxPlayers: number;
   rakeBps: number;
+  programId: string;
+  rpcUrl: string;
+}
+
+/**
+ * [ARENA] The RPC endpoint handed to joining browsers, which submit their own
+ * join_match transaction. Falls back to the server's own SOLANA_RPC_URL, so a
+ * deployment whose endpoint embeds an API key must set ARENA_PUBLIC_RPC_URL to
+ * a keyless one — this value is public.
+ */
+export function publicRpcUrl(): string {
+  return (
+    process.env.ARENA_PUBLIC_RPC_URL ??
+    process.env.SOLANA_RPC_URL ??
+    "https://api.devnet.solana.com"
+  );
 }
 
 export function toWagerInfo(config: WagerConfig): WagerInfo {
@@ -30,6 +50,8 @@ export function toWagerInfo(config: WagerConfig): WagerInfo {
     entryFee: config.entryFee.toString(),
     maxPlayers: config.maxPlayers,
     rakeBps: config.rakeBps,
+    programId: config.programId,
+    rpcUrl: publicRpcUrl(),
   };
 }
 

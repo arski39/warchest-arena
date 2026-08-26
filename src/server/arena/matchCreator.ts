@@ -5,7 +5,10 @@ import {
 } from "@solana/web3.js";
 import { createHash } from "crypto";
 import type { GameID } from "../../core/Schemas";
-import { buildCreateMatchIx, MAX_RAKE_BPS } from "./arenaProgram";
+import {
+  buildCreateMatchIx,
+  MAX_RAKE_BPS,
+} from "../../core/arena/arenaProgram";
 import { matchRegistry, type WagerConfig } from "./matchRegistry";
 import { connection } from "./rpcClient";
 import { serverKeypair, serverKeypairPath } from "./serverKeypair";
@@ -126,6 +129,7 @@ export async function createWageredMatch(
     maxPlayers: config.maxPlayers,
     rakeBps,
     nonce,
+    programId: programId.toBase58(),
   };
   matchRegistry.register(gameId, wager);
   console.log(

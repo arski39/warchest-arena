@@ -439,6 +439,13 @@ export async function startWorker() {
     if (!wageringConfigured()) {
       return res.status(503).json({ error: "wager_not_configured" });
     }
+    // Attaching a wager is what turns the join gate on, so anyone already
+    // connected got in without staking and cannot be made to retroactively.
+    // The creator's own connection is expected (their join fires when the
+    // lobby view opens); they re-join through the gate once this returns.
+    if (game.numClients() > 1) {
+      return res.status(409).json({ error: "wager_lobby_not_empty" });
+    }
 
     try {
       const wager = await createWageredMatch(game.id, {

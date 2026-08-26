@@ -893,6 +893,7 @@
     "wager_error_wager_already_set": "This lobby already has a stake attached.",
     "wager_error_wager_creation_failed": "The on-chain escrow could not be created. The lobby is still free to play.",
     "wager_error_wager_game_already_started": "The game has already started.",
+    "wager_error_wager_lobby_not_empty": "Set the stake before anyone joins — players already in the lobby have not staked.",
     "wager_error_wager_not_configured": "This server is not configured for wagered matches.",
     "wager_error_wager_private_lobbies_only": "Wagered matches must stay private.",
     "wager_max_players": "Max staked players",
@@ -1812,6 +1813,21 @@
     "verified_sub_required": "You need an active subscription to play under your verified name.",
     "verified_sub_required_confirm": "View store",
     "verified_toggle": "Verified"
+  },
+  "wager_lobby": {
+    "title": "Wagered match",
+    "description": "Your stake is transferred into an on-chain escrow that only the program can pay out. The winner is paid automatically when the match ends.",
+    "entry_fee": "Your stake",
+    "max_players": "Staked players",
+    "winner_takes": "Winner receives",
+    "mint": "Token",
+    "connect_wallet": "Connect wallet",
+    "join_and_stake": "Join & stake",
+    "cancel": "Back out",
+    "status_signing": "Approve the signature...",
+    "status_staking": "Confirming the stake...",
+    "status_confirming": "Confirming...",
+    "error_generic": "Could not stake into this match. Please try again."
   },
   "win_modal": {
     "died": "You died",

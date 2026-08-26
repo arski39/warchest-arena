@@ -1,4 +1,8 @@
-import { connectWallet, getConnectedWallet, type WalletAdapter } from "./WalletProvider";
+import {
+  connectWallet,
+  getConnectedWallet,
+  type WalletAdapter,
+} from "./WalletProvider";
 
 // Must match server: src/server/arena/auth.ts AUTH_PREFIX
 const AUTH_PREFIX = "OpenFront Arena\nAuth: ";
@@ -21,10 +25,24 @@ function extractJti(token: string): string {
 }
 
 /**
+ * base64 of raw bytes, without pulling in a Buffer polyfill. `Buffer` is a Node
+ * global and is simply undefined in the browser, so the obvious
+ * `Buffer.from(sig).toString("base64")` type-checks (via @types/node) and then
+ * throws at runtime. btoa needs a binary string, hence the per-byte map.
+ */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
  * Signs the canonical auth message for the given JWT token using the
  * connected Solana wallet.  Prompts the user to connect if not already done.
  */
-export async function signAuthMessage(token: string): Promise<WalletAuthResult> {
+export async function signAuthMessage(
+  token: string,
+): Promise<WalletAuthResult> {
   let wallet: WalletAdapter;
   const existing = getConnectedWallet();
   if (existing) {
@@ -38,6 +56,6 @@ export async function signAuthMessage(token: string): Promise<WalletAuthResult> 
   const sigBytes = await wallet.signMessage(message);
   return {
     walletAddress: wallet.publicKey,
-    walletSig: Buffer.from(sigBytes).toString("base64"),
+    walletSig: toBase64(sigBytes),
   };
 }
