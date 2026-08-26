@@ -29,6 +29,11 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
     turnstileSiteKey: JSON.stringify(ServerEnv.turnstileSiteKey()),
     jwtAudience: JSON.stringify(ServerEnv.jwtAudience()),
     instanceId: JSON.stringify(ServerEnv.instanceId()),
+    // [ARENA] Raw (unquoted) -- index.html emits these with <%= %>, which
+    // escapes them there. JSON.stringify would embed the quotes as literals.
+    siteOrigin: ServerEnv.siteOrigin(),
+    siteName: ServerEnv.siteName(),
+    sourceRepoUrl: JSON.stringify(ServerEnv.sourceRepoUrl()),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(
@@ -41,12 +46,23 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
       assetManifest,
       cdnBase,
     ),
+    // [ARENA] Both logos pointed at the placeholder SVG. Upstream used
+    // images/OpenFront.png and images/OF.png, which lived only in
+    // proprietary/ (All Rights Reserved) and so cannot ship in a fork. See
+    // docs/branding.md. buildAssetUrl falls back to a bare /path for an
+    // unknown key rather than throwing, so a missing asset would 404 quietly
+    // instead of failing the render -- easy to miss, hence pointing them
+    // somewhere real.
     desktopLogoImageUrl: buildAssetUrl(
-      "images/OpenFront.png",
+      "images/OpenFrontLogo.svg",
       assetManifest,
       cdnBase,
     ),
-    mobileLogoImageUrl: buildAssetUrl("images/OF.png", assetManifest, cdnBase),
+    mobileLogoImageUrl: buildAssetUrl(
+      "images/OpenFrontLogo.svg",
+      assetManifest,
+      cdnBase,
+    ),
   });
 }
 

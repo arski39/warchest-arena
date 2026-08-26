@@ -37,6 +37,10 @@ declare global {
       // Desktop-only: explicit game-server host for the WebSocket origin.
       // Absent on the web build (client falls back to same-origin location).
       serverHost?: string;
+      // [ARENA] Where this deployment's source lives. AGPL v3 section 13
+      // requires a modified version offered over a network to offer its
+      // corresponding source to the people using it; the footer link is how.
+      sourceRepoUrl?: string;
     };
   }
 }

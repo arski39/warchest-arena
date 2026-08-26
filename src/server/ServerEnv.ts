@@ -146,6 +146,45 @@ export class ServerEnv {
   static subdomain(): string {
     return process.env.SUBDOMAIN ?? "";
   }
+
+  // [ARENA] Public origin of this deployment. Upstream hard-coded
+  // https://openfront.io/ into index.html's canonical and og:url; a fork must
+  // not claim that URL, so both derive from DOMAIN instead. Deliberately the
+  // apex and not SUBDOMAIN.DOMAIN -- canonical should name one address, and
+  // every subdomain deployment serves the same app.
+  static siteOrigin(): string {
+    const domain = ServerEnv.domain();
+    if (domain === "" || domain === "localhost") return "http://localhost:9000";
+    return `https://${domain}`;
+  }
+
+  // [ARENA] Display name for og:title, which upstream hard-coded to
+  // "OpenFront - Battle Royale". Falls back to the domain so an unset
+  // SITE_NAME still says something true rather than something borrowed.
+  // [ARENA] Source repository for this deployment. AGPL v3 section 13: a
+  // modified version offered to users over a network must offer them its
+  // corresponding source. Empty means "unset" and the client falls back to
+  // upstream, which is only honest for an unmodified deployment -- so
+  // warnIfSourceRepoUnset() complains about it outside dev.
+  static sourceRepoUrl(): string {
+    return process.env.SOURCE_REPO_URL ?? "";
+  }
+
+  static warnIfSourceRepoUnset(log: { warn: (msg: string) => void }): void {
+    if (ServerEnv.env() === GameEnv.Dev) return;
+    if (ServerEnv.sourceRepoUrl() !== "") return;
+    log.warn(
+      "SOURCE_REPO_URL is unset, so the footer still links to upstream " +
+        "(https://github.com/openfrontio/OpenFrontIO). This build is modified, " +
+        "and AGPL v3 section 13 requires offering users the source of the " +
+        "version they are actually running. Set SOURCE_REPO_URL.",
+    );
+  }
+
+  static siteName(): string {
+    const name = process.env.SITE_NAME;
+    return name && name.length > 0 ? name : ServerEnv.domain();
+  }
   static otelEnabled(): boolean {
     return (
       ServerEnv.gameEnv !== GameEnv.Dev &&

@@ -45,6 +45,8 @@ export class ClientEnv {
       // Optional: only the desktop app injects an explicit game-server host.
       // Absent on the web build (falls back to same-origin window.location).
       serverHost: bc.serverHost,
+      // [ARENA] Optional: unset deployments fall back to upstream below.
+      sourceRepoUrl: bc.sourceRepoUrl,
     };
     return ClientEnv.values;
   }
@@ -70,6 +72,22 @@ export class ClientEnv {
   }
   static gitCommit(): string {
     return ClientEnv.get().gitCommit;
+  }
+  /**
+   * [ARENA] Source repository for THIS deployment, for the footer link that
+   * satisfies AGPL v3 section 13. Falls back to upstream, which is correct
+   * only for an unmodified deployment -- ServerEnv warns at boot when a
+   * non-dev server leaves SOURCE_REPO_URL unset, because this fork is by
+   * definition modified.
+   */
+  static sourceRepoUrl(): string {
+    // Empty, not just absent: the server sends "" for an unset
+    // SOURCE_REPO_URL, and ?? would let that through as href="" -- which
+    // silently links to the current page instead of anywhere useful.
+    const url = ClientEnv.get().sourceRepoUrl;
+    return url !== undefined && url !== ""
+      ? url
+      : "https://github.com/openfrontio/OpenFrontIO";
   }
   static jwtIssuer(): string {
     const audience = ClientEnv.jwtAudience();
@@ -210,4 +228,5 @@ export interface ClientEnvValues {
   instanceId: string;
   gitCommit: string;
   serverHost?: string;
+  sourceRepoUrl?: string;
 }

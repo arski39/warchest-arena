@@ -130,6 +130,8 @@ export async function startMaster() {
 
   log.info(`Instance ID: ${INSTANCE_ID}`);
 
+  ServerEnv.warnIfSourceRepoUnset(log); // [ARENA] AGPL v3 section 13
+
   // Fork workers
   for (let i = 0; i < ServerEnv.numWorkers(); i++) {
     const worker = cluster.fork({
