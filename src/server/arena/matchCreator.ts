@@ -45,11 +45,6 @@ export function arenaProgramId(): PublicKey | null {
   }
 }
 
-/** Whether this server can escrow a wager at all. Checked before offering it. */
-export function wageringConfigured(): boolean {
-  return arenaProgramId() !== null && serverKeypairPath() !== undefined;
-}
-
 /**
  * The house cut, in basis points. An operator setting, never a host one — a
  * lobby host must not be able to choose what the house takes, and the program

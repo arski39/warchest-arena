@@ -39,9 +39,13 @@ import {
   arenaMaxEntryFee,
   createWageredMatch,
   entryFeeWithinCap,
-  wageringConfigured,
 } from "./arena/matchCreator";
 import { matchRegistry, toWagerInfo } from "./arena/matchRegistry";
+import {
+  runWagerPreflight,
+  wagerDisabledReason,
+  wageringOperational,
+} from "./arena/preflight"; // [ARENA]
 import { verifyOnchainMembership } from "./arena/rpcClient";
 import { walletRegistry } from "./arena/walletRegistry";
 import { MapPlaylist } from "./MapPlaylist";
@@ -68,6 +72,10 @@ export async function startWorker() {
   // completes, and a join that raced it would take the strict path — safe, but
   // confusing enough in dev to be worth ordering properly.
   await resolveDevBypass();
+  // Likewise before any lobby can be offered a wager. Both fail closed, so a
+  // request that somehow raced them sees a free-to-play server rather than a
+  // half-verified one.
+  await runWagerPreflight();
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -452,8 +460,13 @@ export async function startWorker() {
     if (matchRegistry.isWagered(game.id)) {
       return res.status(409).json({ error: "wager_already_set" });
     }
-    if (!wageringConfigured()) {
-      return res.status(503).json({ error: "wager_not_configured" });
+    if (!wageringOperational()) {
+      // The reason is the operator's own misconfiguration, not anything the
+      // caller controls, so it is safe to hand back and saves a log dive.
+      return res.status(503).json({
+        error: "wager_not_configured",
+        reason: wagerDisabledReason() ?? undefined,
+      });
     }
     // [ARENA] Operator ceiling on the stake. Checked here rather than in the
     // program: the escrow is equally sound at any size, so this is policy, and
@@ -510,7 +523,7 @@ export async function startWorker() {
     const wager = matchRegistry.get(game.id);
     res.json({
       ...game.gameInfo(),
-      wagerAvailable: wageringConfigured(),
+      wagerAvailable: wageringOperational(),
       ...(wager !== undefined ? { wager: toWagerInfo(wager) } : {}),
     });
   });
