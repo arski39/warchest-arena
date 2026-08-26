@@ -979,7 +979,10 @@ export const ClientJoinMessageSchema = z.object({
   spectator: z.boolean().optional(),
   // [ARENA] Solana wallet fields — present only for wagered matches.
   // walletAddress: base58 pubkey; walletSig: base64 ed25519 sig over
-  // "OpenFront Arena\nAuth: {jti}"; onchainTxSig: confirmed join_match tx.
+  // "OpenFront Arena\nAuth: {jti}".
+  // onchainTxSig is the confirmed join_match tx, kept for audit only: the
+  // server authorises off the escrow's players[], not off a signature the
+  // client chose to send it.
   walletAddress: z.string().optional(),
   walletSig: z.string().optional(),
   onchainTxSig: z.string().optional(),

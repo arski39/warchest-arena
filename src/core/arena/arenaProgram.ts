@@ -85,6 +85,10 @@ export const MATCH_ACCOUNT_LAYOUT = {
 /** Total on-chain size, matching `MatchAccount::SPACE`. */
 export const MATCH_ACCOUNT_SIZE = 774;
 
+/** Width of the fixed-size `players` / `stakes` slots. */
+const PUBKEY_SIZE = 32;
+const U64_SIZE = 8;
+
 /** `MatchStatus` discriminants, in declaration order. */
 export enum MatchStatus {
   Open = 0,
@@ -278,4 +282,120 @@ export function buildJoinMatchIx(
     ],
     data: Buffer.from(IX_DISCRIMINATOR.join_match),
   });
+}
+
+//
+// Account decoding
+//
+
+/** A `MatchAccount` that failed validation before any field was trusted. */
+export class MatchAccountDecodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MatchAccountDecodeError";
+  }
+}
+
+export interface MatchAccountView {
+  authority: PublicKey;
+  mint: PublicKey;
+  vault: PublicKey;
+  entryFee: bigint;
+  rakeBps: number;
+  maxPlayers: number;
+  /** Number of populated entries in `players` / `stakes`. */
+  playerCount: number;
+  status: MatchStatus;
+  /**
+   * Exactly `playerCount` wallets, in the order they joined. This order is
+   * load-bearing for settlement: `settle_match`'s `scores` argument is indexed
+   * against it, so standings must be rebuilt from here rather than from any
+   * server-side ordering.
+   */
+  players: PublicKey[];
+  /** Aligned with `players`; each is the entry fee at the time of joining. */
+  stakes: bigint[];
+  createdAt: bigint;
+  nonce: bigint;
+  bump: number;
+}
+
+/**
+ * Decodes a `MatchAccount` from raw account bytes at the offsets above.
+ *
+ * Pure by design: no RPC, no Node built-ins, so bankrun can feed it bytes the
+ * real program just wrote (`tests/arenaProgram.ts`) and the browser could
+ * decode a match too. `fetchMatchAccount` in the server's rpcClient.ts is the
+ * thin wrapper that does the network call.
+ *
+ * `owner` must be the account's on-chain owner. Checking it against the program
+ * is not a formality: without it any account of the right length would decode
+ * into a plausible-looking match, so a caller could be pointed at attacker-
+ * controlled bytes and read whatever `players[]` they liked out of them.
+ */
+export function decodeMatchAccount(
+  data: Uint8Array,
+  owner: PublicKey,
+  programId: PublicKey,
+): MatchAccountView {
+  if (!owner.equals(programId)) {
+    throw new MatchAccountDecodeError(
+      `account is owned by ${owner.toBase58()}, not the arena program ${programId.toBase58()}`,
+    );
+  }
+  if (data.length !== MATCH_ACCOUNT_SIZE) {
+    throw new MatchAccountDecodeError(
+      `expected ${MATCH_ACCOUNT_SIZE} bytes, got ${data.length}`,
+    );
+  }
+  for (let i = 0; i < MATCH_ACCOUNT_DISCRIMINATOR.length; i++) {
+    if (data[i] !== MATCH_ACCOUNT_DISCRIMINATOR[i]) {
+      throw new MatchAccountDecodeError(
+        "account discriminator is not MatchAccount",
+      );
+    }
+  }
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const L = MATCH_ACCOUNT_LAYOUT;
+  const pubkeyAt = (offset: number) =>
+    new PublicKey(data.subarray(offset, offset + PUBKEY_SIZE));
+
+  const statusByte = data[L.status]!;
+  if (!(statusByte in MatchStatus)) {
+    throw new MatchAccountDecodeError(`unknown MatchStatus ${statusByte}`);
+  }
+
+  const maxPlayers = data[L.maxPlayers]!;
+  const playerCount = data[L.playerCount]!;
+  // player_count indexes into players[]; a corrupt value would read past the
+  // populated slots (or, unchecked, past the array) and invent participants.
+  if (maxPlayers > MAX_PLAYERS || playerCount > maxPlayers) {
+    throw new MatchAccountDecodeError(
+      `implausible player counts: ${playerCount} of ${maxPlayers} (max ${MAX_PLAYERS})`,
+    );
+  }
+
+  const players: PublicKey[] = [];
+  const stakes: bigint[] = [];
+  for (let i = 0; i < playerCount; i++) {
+    players.push(pubkeyAt(L.players + i * PUBKEY_SIZE));
+    stakes.push(view.getBigUint64(L.stakes + i * U64_SIZE, true));
+  }
+
+  return {
+    authority: pubkeyAt(L.authority),
+    mint: pubkeyAt(L.mint),
+    vault: pubkeyAt(L.vault),
+    entryFee: view.getBigUint64(L.entryFee, true),
+    rakeBps: view.getUint16(L.rakeBps, true),
+    maxPlayers,
+    playerCount,
+    status: statusByte as MatchStatus,
+    players,
+    stakes,
+    createdAt: view.getBigInt64(L.createdAt, true),
+    nonce: view.getBigUint64(L.nonce, true),
+    bump: data[L.bump]!,
+  };
 }

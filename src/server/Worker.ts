@@ -801,11 +801,10 @@ export async function startWorker() {
           }
           if (ServerEnv.env() !== GameEnv.Dev) {
             const wager = matchRegistry.get(clientMsg.gameID)!;
-            const inMatch = await verifyOnchainMembership(
-              wager.matchPDA,
-              walletAddress,
-              clientMsg.onchainTxSig,
-            );
+            // Reads the escrow's players[] rather than the tx signature the
+            // client sent: the program only writes a wallet there after the
+            // entry fee has landed in the vault.
+            const inMatch = await verifyOnchainMembership(wager, walletAddress);
             if (!inMatch) {
               log.warn("On-chain entry fee not confirmed", {
                 persistentID: persistentId,
@@ -820,6 +819,10 @@ export async function startWorker() {
             persistentID: persistentId,
             gameID: clientMsg.gameID,
             wallet: walletAddress.slice(0, 8),
+            // Not used to authorise anything — membership is read from the
+            // escrow's players[]. Recorded so a disputed payout can be traced
+            // back to the transaction the player says they sent.
+            onchainTxSig: clientMsg.onchainTxSig,
           });
         }
 
