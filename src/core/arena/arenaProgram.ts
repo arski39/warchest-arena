@@ -19,8 +19,10 @@
 // for the same bare specifier.
 
 import {
+  Ed25519Program,
   PublicKey,
   SystemProgram,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
   TransactionInstruction,
 } from "@solana/web3.js";
@@ -398,4 +400,167 @@ export function decodeMatchAccount(
     nonce: view.getBigUint64(L.nonce, true),
     bump: data[L.bump]!,
   };
+}
+
+//
+// Settlement
+//
+
+/**
+ * The exact bytes `settle_match` hashes to check the server's signature:
+ * `match_account.key() || winner || scores.map(u64_le)`, concatenated raw.
+ *
+ * Not JSON, not the game id, no separators — see the `hashv` call in
+ * `settle_match.rs`. Getting this wrong produces a valid-looking signature the
+ * program rejects with `InvalidResultSignature`, and the pot stays locked.
+ *
+ * The hashing itself is left to the caller: sha256 has no synchronous
+ * cross-realm implementation, and this module must stay browser-safe. Server
+ * side that is `createHash("sha256").update(preimage).digest()`.
+ */
+export function settleMessagePreimage(
+  matchPda: PublicKey,
+  winner: PublicKey,
+  scores: bigint[],
+): Uint8Array {
+  return concat([matchPda.toBytes(), winner.toBytes(), ...scores.map(u64LE)]);
+}
+
+/**
+ * The ed25519 signature-verification instruction that must sit at **index 0**
+ * of the settle transaction. `settle_match` reads instruction 0 out of the
+ * instructions sysvar and refuses anything else, so this is positional, not
+ * merely conventional.
+ *
+ * Built by web3.js rather than by hand: the program parses the offsets at
+ * fixed header positions, and the canonical builder is the thing least likely
+ * to drift from what the runtime's verifier expects.
+ */
+export function buildEd25519VerifyIx(
+  publicKey: Uint8Array,
+  signature: Uint8Array,
+  message: Uint8Array,
+): TransactionInstruction {
+  return Ed25519Program.createInstructionWithPublicKey({
+    publicKey,
+    signature,
+    message,
+  });
+}
+
+export interface SettleMatchParams {
+  programId: PublicKey;
+  matchPda: PublicKey;
+  vault: PublicKey;
+  /** Token account the payout goes to. Must exist; the program will not create it. */
+  winnerToken: PublicKey;
+  /** Rake destination. Still a required account when rakeBps is 0. */
+  treasuryToken: PublicKey;
+  winner: PublicKey;
+  /** Indexed against `MatchAccount.players[0..player_count]`, in join order. */
+  scores: bigint[];
+}
+
+/**
+ * Builds `settle_match`. Declares **no signer**: the server authorises through
+ * the ed25519 prelude instruction above, not by signing this one. Passing the
+ * server key as a signer here fails with `unknown signer`.
+ *
+ * Args are Borsh: `winner: pubkey`, then `scores: Vec<u64>` as a u32 length
+ * prefix followed by the little-endian elements.
+ */
+export function buildSettleMatchIx(
+  params: SettleMatchParams,
+): TransactionInstruction {
+  const { programId, matchPda, vault, winnerToken, treasuryToken } = params;
+
+  const lengthPrefix = new Uint8Array(4);
+  new DataView(lengthPrefix.buffer).setUint32(0, params.scores.length, true);
+
+  const data = concat([
+    IX_DISCRIMINATOR.settle_match,
+    params.winner.toBytes(),
+    lengthPrefix,
+    ...params.scores.map(u64LE),
+  ]);
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: matchPda, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: winnerToken, isSigner: false, isWritable: true },
+      { pubkey: treasuryToken, isSigner: false, isWritable: true },
+      {
+        pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
+        isSigner: false,
+        isWritable: false,
+      },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+export interface CancelMatchParams {
+  programId: PublicKey;
+  authority: PublicKey;
+  matchPda: PublicKey;
+  vault: PublicKey;
+  /**
+   * One token account per staker, **in `players[]` join order** — the program
+   * pairs `remaining_accounts[i]` with `stakes[i]`, so a wrong order refunds
+   * the wrong amounts to the wrong people.
+   */
+  refundTokenAccounts: PublicKey[];
+}
+
+/** Builds `cancel_match`: refunds every staker. Authority-only, Open only. */
+export function buildCancelMatchIx(
+  params: CancelMatchParams,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: params.programId,
+    keys: [
+      { pubkey: params.authority, isSigner: true, isWritable: false },
+      { pubkey: params.matchPda, isSigner: false, isWritable: true },
+      { pubkey: params.vault, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ...params.refundTokenAccounts.map((pubkey) => ({
+        pubkey,
+        isSigner: false,
+        isWritable: true,
+      })),
+    ],
+    data: Buffer.from(IX_DISCRIMINATOR.cancel_match),
+  });
+}
+
+/**
+ * Associated Token Program `CreateIdempotent`. Needed because neither
+ * `settle_match` nor `cancel_match` creates the account it pays into, and a
+ * player is not obliged to have staked from their canonical ATA — `join_match`
+ * only requires the right owner and mint. Without this a payout can fail on an
+ * account that simply does not exist yet, leaving the pot locked.
+ *
+ * Idempotent: succeeds as a no-op if the ATA is already there.
+ */
+export function buildCreateAtaIdempotentIx(
+  payer: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: deriveAta(owner, mint), isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    // 0 = Create, 1 = CreateIdempotent.
+    data: Buffer.from(Uint8Array.from([1])),
+  });
 }

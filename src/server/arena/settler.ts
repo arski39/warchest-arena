@@ -1,84 +1,311 @@
+import {
+  PublicKey,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
 import { createHash } from "crypto";
 import nacl from "tweetnacl";
-import { GameEnv } from "../../core/configuration/Config";
+import {
+  buildCancelMatchIx,
+  buildCreateAtaIdempotentIx,
+  buildEd25519VerifyIx,
+  buildSettleMatchIx,
+  deriveAta,
+  MatchStatus,
+  settleMessagePreimage,
+  type MatchAccountView,
+} from "../../core/arena/arenaProgram";
 import type { ClientSendWinnerMessage } from "../../core/Schemas";
 import type { Client } from "../Client";
-import { ServerEnv } from "../ServerEnv";
-import { matchRegistry } from "./matchRegistry";
+import { matchRegistry, type WagerConfig } from "./matchRegistry";
+import { connection, fetchMatchAccount } from "./rpcClient";
 import { serverKeypair } from "./serverKeypair";
 import { walletRegistry } from "./walletRegistry";
 
 /**
- * Signs sha256(gameID || winnerWallet || standings) and submits the
- * settle_match instruction.  Called from GameServer.archiveGame() after
- * winner consensus is reached.
+ * [ARENA] Pays out a wagered match, or refunds it if it never started.
  *
- * Full Anchor program call is wired in Phase 2 (task 6-7).
+ * Called from GameServer.archiveGame() once winner consensus is reached. Note
+ * the caveat in CLAUDE.md: the winner is what a majority of clients reported,
+ * not something the server computed. This function signs what it is given.
+ *
+ * There is deliberately no dev-mode short-circuit. A game only appears in
+ * matchRegistry if createWageredMatch put a real escrow on chain, so skipping
+ * submission in dev would not avoid touching the chain — it would leave real
+ * staked tokens locked in a vault with no path out.
  */
 export async function settle(
   gameId: string,
-  winner: ClientSendWinnerMessage | undefined,
+  winner: ClientSendWinnerMessage | null | undefined,
   allClients: ReadonlyMap<string, Client>,
 ): Promise<void> {
   const wager = matchRegistry.get(gameId);
   if (!wager) return; // free-practice game — nothing to settle
 
-  if (!winner?.winner || winner.winner === undefined) {
-    console.error(`[arena/settler] no winner for wagered game ${gameId}`);
-    return;
-  }
-
-  // Determine winner wallet pubkey.
-  const [winnerType, winnerClientId] = winner.winner as [string, string];
-  if (winnerType !== "player") {
+  const match = await fetchMatchAccount(wager);
+  if (match === null) {
+    // Keep the registry entry: the escrow may simply not be visible on this RPC
+    // yet, and dropping it discards the only pointer we hold to the pot.
     console.error(
-      `[arena/settler] team wins not yet supported for wagered matches (game ${gameId})`,
+      `[arena/settler] match account ${wager.matchPDA} not found for game ${gameId}`,
     );
     return;
   }
 
-  const winnerClient = allClients.get(winnerClientId);
-  const winnerPersistentId = winnerClient?.persistentID;
-  const winnerWallet = winnerPersistentId
-    ? walletRegistry.get(winnerPersistentId)
-    : undefined;
-
-  if (!winnerWallet) {
-    console.error(
-      `[arena/settler] no wallet registered for winner ${winnerClientId} in game ${gameId}`,
-    );
-    return;
-  }
-
-  // Build standings: [score, score, ...] ordered by clientID for determinism.
-  const standings = Object.entries(winner.allPlayersStats)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([, stats]) => Number(stats.finalTiles ?? 0));
-
-  // Sign: sha256(gameId || winnerWallet || JSON(standings))
-  const payload = `${gameId}:${winnerWallet}:${JSON.stringify(standings)}`;
-  const digest = createHash("sha256").update(payload).digest();
-
-  if (ServerEnv.env() === GameEnv.Dev) {
-    // Skip actual signing/submission in dev — keypair may not be present.
+  if (
+    match.status === MatchStatus.Settled ||
+    match.status === MatchStatus.Cancelled
+  ) {
     console.log(
-      `[arena/settler][dev] would settle game=${gameId} winner=${winnerWallet} standings=${JSON.stringify(standings)}`,
+      `[arena/settler] game=${gameId} is already ${MatchStatus[match.status]} on-chain`,
     );
     matchRegistry.unregister(gameId);
     return;
   }
 
-  // Same key that created the match, which is what settle_match verifies
-  // against `match_account.authority`.
-  const sig = nacl.sign.detached(digest, serverKeypair().secretKey);
+  // join_match only flips Open -> InProgress once player_count reaches
+  // max_players, and settle_match accepts nothing but InProgress. A lobby that
+  // played out without filling every staked seat therefore cannot be paid out
+  // at all, so the honest resolution is to hand everyone their stake back
+  // rather than leave the pot sitting in the vault.
+  if (match.status === MatchStatus.Open) {
+    console.warn(
+      `[arena/settler] game=${gameId} never filled (${match.playerCount}/${match.maxPlayers} staked); refunding`,
+    );
+    await refund(gameId, wager, match);
+    return;
+  }
 
-  console.log(
-    `[arena/settler] game=${gameId} winner=${winnerWallet} ` +
-      `sig=${Buffer.from(sig).toString("hex").slice(0, 16)}…`,
+  const winnerWallet = winner
+    ? resolveWinnerWallet(gameId, winner, allClients, match)
+    : null;
+  if (winner === null || winner === undefined || winnerWallet === null) {
+    // Nobody can be paid, but the stakes are real. Refunding is not available
+    // here: the match is InProgress, which cancel_match refuses.
+    console.error(
+      `[arena/settler] game=${gameId} has no resolvable winner; pot stays in escrow at ${wager.matchPDA}`,
+    );
+    return;
+  }
+
+  await payOut(
+    gameId,
+    wager,
+    match,
+    winnerWallet,
+    buildScores(match, winner, allClients),
   );
+}
 
-  // TODO (Phase 2, task 14): build and submit settle_match tx via @coral-xyz/anchor.
-  // await submitSettleTx(wager.matchPDA, winnerWallet, standings, sig);
+/**
+ * The winning wallet, or null when it cannot be established. Every failure path
+ * leaves the pot untouched rather than guessing — paying the wrong wallet is
+ * not recoverable.
+ */
+function resolveWinnerWallet(
+  gameId: string,
+  winner: ClientSendWinnerMessage,
+  allClients: ReadonlyMap<string, Client>,
+  match: MatchAccountView,
+): PublicKey | null {
+  if (!winner.winner) {
+    console.error(`[arena/settler] no winner reported for game ${gameId}`);
+    return null;
+  }
+  const [winnerType, winnerClientId] = winner.winner;
+  if (winnerType !== "player") {
+    // A team win has no single payee, and settle_match pays exactly one.
+    console.error(
+      `[arena/settler] ${winnerType} wins are not supported for wagered matches (game ${gameId})`,
+    );
+    return null;
+  }
 
+  const persistentId = allClients.get(winnerClientId)?.persistentID;
+  const wallet = persistentId ? walletRegistry.get(persistentId) : undefined;
+  if (wallet === undefined) {
+    console.error(
+      `[arena/settler] no wallet registered for winner ${winnerClientId} in game ${gameId}`,
+    );
+    return null;
+  }
+
+  let winnerKey: PublicKey;
+  try {
+    winnerKey = new PublicKey(wallet);
+  } catch {
+    console.error(`[arena/settler] winner wallet ${wallet} is not an address`);
+    return null;
+  }
+
+  // settle_match enforces this too (WinnerNotInMatch); checking first turns a
+  // rejected transaction into a log line that names the problem.
+  if (!match.players.some((p) => p.equals(winnerKey))) {
+    console.error(
+      `[arena/settler] winner ${wallet} did not stake in game ${gameId}`,
+    );
+    return null;
+  }
+  return winnerKey;
+}
+
+/**
+ * Scores aligned with `match.players` — join order, which is the order
+ * settle_match hashes them in. Rebuilt from chain state rather than from any
+ * server-side ordering so the signed digest is reproducible by anyone holding
+ * the match account and the final stats.
+ *
+ * A staker with no reported stats scores 0 rather than being skipped: the
+ * vector is positional, so omitting an entry would shift every later player
+ * onto somebody else's score.
+ */
+export function buildScores(
+  match: MatchAccountView,
+  winner: ClientSendWinnerMessage,
+  allClients: ReadonlyMap<string, Client>,
+): bigint[] {
+  const byWallet = new Map<string, bigint>();
+  for (const [clientId, stats] of Object.entries(winner.allPlayersStats)) {
+    const persistentId = allClients.get(clientId)?.persistentID;
+    const wallet = persistentId ? walletRegistry.get(persistentId) : undefined;
+    if (wallet === undefined) continue;
+    byWallet.set(wallet, BigInt(stats?.finalTiles ?? 0));
+  }
+  return match.players.map((p) => byWallet.get(p.toBase58()) ?? 0n);
+}
+
+/**
+ * The rake destination. settle_match requires the account even at 0 bps, in
+ * which case it transfers nothing to it — so the winner's own token account is
+ * a safe stand-in and saves operators configuring something never used.
+ */
+function treasuryTokenAccount(
+  match: MatchAccountView,
+  winnerToken: PublicKey,
+): PublicKey | null {
+  const configured = process.env.TREASURY_TOKEN_ACCOUNT;
+  if (configured) {
+    try {
+      return new PublicKey(configured);
+    } catch {
+      console.error(
+        `[arena/settler] TREASURY_TOKEN_ACCOUNT "${configured}" is not an address`,
+      );
+      return null;
+    }
+  }
+  if (match.rakeBps > 0) return null; // the rake would go nowhere
+  return winnerToken;
+}
+
+async function payOut(
+  gameId: string,
+  wager: WagerConfig,
+  match: MatchAccountView,
+  winner: PublicKey,
+  scores: bigint[],
+): Promise<void> {
+  const authority = serverKeypair();
+  const matchPda = new PublicKey(wager.matchPDA);
+
+  // join_match accepts any token account with the right owner and mint, so a
+  // winner who staked from a non-canonical one may have no ATA yet, and
+  // settle_match will not create the account it pays into.
+  const winnerToken = deriveAta(winner, match.mint);
+  await ensureTokenAccount(winnerToken, winner, match.mint);
+
+  const treasuryToken = treasuryTokenAccount(match, winnerToken);
+  if (treasuryToken === null) {
+    console.error(
+      `[arena/settler] rake is ${match.rakeBps} bps but TREASURY_TOKEN_ACCOUNT is unset; refusing to settle game ${gameId}`,
+    );
+    return;
+  }
+
+  const digest = createHash("sha256")
+    .update(settleMessagePreimage(matchPda, winner, scores))
+    .digest();
+  const signature = nacl.sign.detached(digest, authority.secretKey);
+
+  // Order is load-bearing: settle_match reads instruction 0 out of the
+  // instructions sysvar and rejects anything that is not the ed25519 verify.
+  const tx = new Transaction()
+    .add(buildEd25519VerifyIx(authority.publicKey.toBytes(), signature, digest))
+    .add(
+      buildSettleMatchIx({
+        programId: new PublicKey(wager.programId),
+        matchPda,
+        vault: new PublicKey(wager.vault),
+        winnerToken,
+        treasuryToken,
+        winner,
+        scores,
+      }),
+    );
+
+  const txSig = await sendAndConfirmTransaction(connection, tx, [authority], {
+    commitment: "confirmed",
+  });
+  console.log(
+    `[arena/settler] settled game=${gameId} winner=${winner.toBase58()} tx=${txSig}`,
+  );
   matchRegistry.unregister(gameId);
+}
+
+async function refund(
+  gameId: string,
+  wager: WagerConfig,
+  match: MatchAccountView,
+): Promise<void> {
+  const authority = serverKeypair();
+
+  // cancel_match pairs remaining_accounts[i] with stakes[i], so these must be
+  // in players[] order, and each must already exist.
+  const refundTokenAccounts = match.players.map((p) =>
+    deriveAta(p, match.mint),
+  );
+  for (const [i, account] of refundTokenAccounts.entries()) {
+    await ensureTokenAccount(account, match.players[i]!, match.mint);
+  }
+
+  const txSig = await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(
+      buildCancelMatchIx({
+        programId: new PublicKey(wager.programId),
+        authority: authority.publicKey,
+        matchPda: new PublicKey(wager.matchPDA),
+        vault: new PublicKey(wager.vault),
+        refundTokenAccounts,
+      }),
+    ),
+    [authority],
+    { commitment: "confirmed" },
+  );
+  console.log(
+    `[arena/settler] refunded game=${gameId} to ${match.players.length} stakers tx=${txSig}`,
+  );
+  matchRegistry.unregister(gameId);
+}
+
+/**
+ * Creates `ata` if it is missing. Sent as its own transaction rather than as a
+ * prelude to the settle one, so it can neither push that over the size limit
+ * nor disturb the ed25519-at-index-0 requirement.
+ */
+async function ensureTokenAccount(
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+): Promise<void> {
+  if ((await connection.getAccountInfo(ata, "confirmed")) !== null) return;
+  const authority = serverKeypair();
+  await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(
+      buildCreateAtaIdempotentIx(authority.publicKey, owner, mint),
+    ),
+    [authority],
+    { commitment: "confirmed" },
+  );
 }
