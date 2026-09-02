@@ -110,6 +110,26 @@ export default defineConfig(({ mode }) => {
     ),
     jwtAudience: JSON.stringify(env.DOMAIN ?? "localhost"),
     instanceId: JSON.stringify(env.INSTANCE_ID ?? "DEV_ID"),
+    // [ARENA] index.html reads these four, so the dev server has to supply
+    // them too -- it renders the same EJS template that RenderHtml.ts does at
+    // request time, from its own copy of the data. H5 added the first three to
+    // index.html and to RenderHtml.ts but not here, which made every
+    // `npm run dev` a 500 ("siteOrigin is not defined"). Quoting must match
+    // RenderHtml.ts exactly: siteOrigin/siteName are raw because index.html
+    // emits them with <%= %> (which escapes there), the other two are
+    // JSON.stringify because they land inside a script literal.
+    siteOrigin:
+      !env.DOMAIN || env.DOMAIN === "localhost"
+        ? "http://localhost:9000"
+        : `https://${env.DOMAIN}`,
+    siteName: env.SITE_NAME || env.DOMAIN || "localhost",
+    sourceRepoUrl: JSON.stringify(env.SOURCE_REPO_URL ?? ""),
+    // The *requested* setting, not the resolved one. resolveDevBypass() also
+    // asks the cluster for its genesis hash, which a config file cannot do --
+    // so this is a hint that keeps the local wager loop testable, and the
+    // server stays the only thing that decides. It cannot leak past dev:
+    // createHtmlPlugin is only registered when !isProduction.
+    arenaDevBypass: JSON.stringify(env.ARENA_DEV_BYPASS === "true"),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(

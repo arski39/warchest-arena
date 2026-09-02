@@ -1,13 +1,16 @@
 // [ARENA] Phase H5: the app shell must not carry upstream's identity, and the
 // three fork-identity variables must actually render.
 //
-// Both halves guard things nothing else catches. index.html is an EJS template
-// rendered only at request time, so a variable the server forgets to pass is a
-// ReferenceError in production that tsc, lint and every other test are blind
-// to -- this suite is the only place the template is actually rendered. And the
-// analytics/branding assertions are a merge guard: upstream's tags sit in a
-// file we take changes from, so a future merge can quietly reinstate them.
+// All three parts guard things nothing else catches. index.html is an EJS
+// template rendered only at request time, so a variable the server forgets to
+// pass is a ReferenceError in production that tsc, lint and every other test
+// are blind to -- this suite is the only place the template is actually
+// rendered. The analytics/branding assertions are a merge guard: upstream's
+// tags sit in a file we take changes from, so a future merge can quietly
+// reinstate them. And the last describe covers the *second* renderer of the
+// same template, vite.config.ts -- see its comment.
 
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,6 +89,50 @@ describe("[ARENA] app shell branding", () => {
     ])("no %s", async (_label, needle) => {
       const html = await renderHtmlContent(templatePath);
       expect(html).not.toContain(needle);
+    });
+  });
+
+  // index.html has TWO renderers, and only one of them is exercised above.
+  // RenderHtml.ts renders it in production; vite.config.ts renders it for
+  // `npm run dev`, from its own hand-maintained copy of the same data. H5 added
+  // siteOrigin/siteName/sourceRepoUrl to the template and to RenderHtml.ts but
+  // not to vite.config.ts, and Phase 2's arenaDevBypass went the same way --
+  // so every `npm run dev` 500'd with "siteOrigin is not defined" and no test
+  // noticed, because no test runs the dev server.
+  //
+  // This is a static check rather than a render: the vite data lives inside
+  // defineConfig's closure and inside createHtmlPlugin's options, so there is
+  // nothing to import. Crude, but it fails on exactly the drift that happened.
+  describe("the vite dev server supplies every template variable too", () => {
+    const viteConfig = fs.readFileSync(
+      path.join(repoRoot, "vite.config.ts"),
+      "utf-8",
+    );
+    const template = fs.readFileSync(templatePath, "utf-8");
+
+    // `<%= foo %>` / `<%- foo %>`, first identifier only. `typeof` is the
+    // keyword opening a guarded expression, not a variable; serverHost is the
+    // variable it guards, and is deliberately server-only.
+    const referenced = [
+      ...new Set(
+        [...template.matchAll(/<%[-=]?\s*([A-Za-z_][A-Za-z0-9_]*)/g)].map(
+          (m) => m[1],
+        ),
+      ),
+    ].filter((name) => name !== "typeof" && name !== "serverHost");
+
+    it("references a plausible number of variables", () => {
+      // Guards the regex itself: if it silently stopped matching, every
+      // it.each below would vacuously pass.
+      expect(referenced.length).toBeGreaterThan(10);
+      expect(referenced).toContain("siteOrigin");
+    });
+
+    it.each(referenced)("vite.config.ts defines %s", (name) => {
+      // Plain substring, not a regex: every key in that object literal is
+      // written `name:`, and searching for the colon keeps cdnBase from
+      // matching cdnBaseRaw.
+      expect(viteConfig).toContain(`${name}:`);
     });
   });
 });
