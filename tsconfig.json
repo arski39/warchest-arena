@@ -29,6 +29,12 @@
     "generated/**/*",
     "tests/**/*",
     "src/scripts",
+    // [ARENA] scripts/ as a whole is NOT included -- the issue-lifecycle and
+    // pr-gate CI scripts depend on @octokit/rest, which is not installed here,
+    // so including the directory adds a dozen pre-existing errors. Standalone
+    // scripts are otherwise reachable only through what tests import, which
+    // this one is not, leaving it invisible to both tsc and eslint.
+    "scripts/generateAuthKey.ts",
     "vite.config.ts"
   ],
   "exclude": ["node_modules"]

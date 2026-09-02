@@ -37,3 +37,23 @@ export function authMessage(nonce: string): string {
 export function devAuthNonce(gameId: string): string {
   return `dev-game:${gameId}`;
 }
+
+/** Prefix of the wallet *login* message. Deliberately different from
+ * AUTH_PREFIX above: the two signatures prove different things and must not be
+ * interchangeable. The per-match signature proves "this wallet is with this
+ * session, for this match"; the login signature proves "this wallet is me" and
+ * mints a session. Sharing a prefix would make a captured match signature a
+ * candidate login and vice versa -- the nonces differ, but domain separation
+ * is one line and does not depend on that staying true. */
+const LOGIN_PREFIX = "OpenFront Arena\nLogin: ";
+
+/**
+ * The message a wallet signs to log in, for a server-issued challenge nonce.
+ *
+ * Lives here for the same reason authMessage() does: the browser builds it and
+ * the auth service verifies it, and a byte of drift between them surfaces only
+ * as an unexplained invalid-signature rejection.
+ */
+export function walletLoginMessage(nonce: string): string {
+  return LOGIN_PREFIX + nonce;
+}

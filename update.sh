@@ -204,10 +204,62 @@ if [ -n "$STOPPED_CONTAINER" ]; then
     echo "Container $STOPPED_CONTAINER removed."
 fi
 
+# [ARENA] The auth service is a second container from the same image, serving
+# api.${DOMAIN}. Same stop-and-remove dance, by its own name.
+AUTH_CONTAINER_NAME="${CONTAINER_NAME}-auth"
+RUNNING_AUTH="$(docker ps --filter "name=^${AUTH_CONTAINER_NAME}$" -q)"
+if [ -n "$RUNNING_AUTH" ]; then
+    echo "Stopping running auth container $RUNNING_AUTH..."
+    docker stop "$RUNNING_AUTH"
+    docker rm "$RUNNING_AUTH"
+fi
+STOPPED_AUTH="$(docker ps -a --filter "name=^${AUTH_CONTAINER_NAME}$" -q)"
+if [ -n "$STOPPED_AUTH" ]; then
+    echo "Removing stopped auth container $STOPPED_AUTH..."
+    docker rm "$STOPPED_AUTH"
+fi
+
+# [ARENA] Secrets reach the containers as read-only bind mounts, never as env
+# vars: an env var lands in `docker inspect`, in the deploy env file, in `ps`,
+# and in any crash dump that prints the environment. Only the in-container
+# *paths* are passed as variables, and this script sets them, because a host
+# path means nothing inside a container.
+#
+# The missing-file check is not defensive padding. Docker silently creates a
+# *directory* for a bind source that does not exist, and that surfaces much
+# later as an unreadable key rather than as a failed deploy.
+ARENA_MOUNT=()
+if [ -n "${ARENA_AUTHORITY_KEYPAIR:-}" ]; then
+    if [ ! -f "${ARENA_AUTHORITY_KEYPAIR}" ]; then
+        echo "❌ ARENA_AUTHORITY_KEYPAIR is ${ARENA_AUTHORITY_KEYPAIR}, which is not a file on this host."
+        exit 1
+    fi
+    ARENA_MOUNT=(-v "${ARENA_AUTHORITY_KEYPAIR}:/run/secrets/arena-authority.json:ro")
+    echo "SERVER_KEYPAIR_PATH=/run/secrets/arena-authority.json" >> "$ENV_FILE"
+    echo "🔑 Mounting the arena authority keypair read-only."
+fi
+
+AUTH_MOUNT=()
+if [ -n "${AUTH_SIGNING_KEY:-}" ]; then
+    if [ ! -f "${AUTH_SIGNING_KEY}" ]; then
+        echo "❌ AUTH_SIGNING_KEY is ${AUTH_SIGNING_KEY}, which is not a file on this host."
+        exit 1
+    fi
+    AUTH_MOUNT=(-v "${AUTH_SIGNING_KEY}:/run/secrets/auth-signing-key.json:ro")
+    echo "🔑 Mounting the auth signing key read-only."
+fi
+
 if [ "${SUBDOMAIN}" = main ] || [ "${DOMAIN}" = openfront.io ]; then
     RESTART=always
 else
     RESTART=no
+fi
+
+# [ARENA] A wagering server that stays down after a crash leaves live escrows
+# with nothing to settle or refund them, and the recovery sweeper only runs
+# while the process does.
+if [ -n "${ARENA_AUTHORITY_KEYPAIR:-}" ]; then
+    RESTART=always
 fi
 
 echo "Starting new container for ${HOST} environment..."
@@ -227,8 +279,40 @@ docker run -d \
     --label "traefik.http.routers.${CONTAINER_NAME}.tls=true" \
     --label "traefik.http.services.${CONTAINER_NAME}.loadbalancer.server.port=80" \
     "${GHCR_IMAGE}"
+MAIN_STATUS=$?
 
-if [ $? -eq 0 ]; then
+# [ARENA] The auth service (src/auth) -- this fork's replacement for upstream's
+# closed-source JWT issuer. Same image, different entrypoint; the game server
+# and the browser both reach it at api.${DOMAIN}, a URL they compute themselves
+# rather than read from a variable.
+#
+# Started only when a signing key is mounted. Without one the service refuses
+# to boot outside dev anyway (an ephemeral key would invalidate every session
+# on each deploy), so a container that could only crash-loop is not started.
+if [ -n "${AUTH_SIGNING_KEY:-}" ]; then
+    echo "Starting auth container for api.${DOMAIN}..."
+    docker run -d \
+        --restart="${RESTART}" \
+        --env-file "$ENV_FILE" \
+        -e AUTH_SIGNING_KEY_PATH=/run/secrets/auth-signing-key.json \
+        "${AUTH_MOUNT[@]}" \
+        --name "${AUTH_CONTAINER_NAME}" \
+        --network web \
+        --entrypoint npm \
+        --label "traefik.enable=true" \
+        --label "traefik.http.routers.${AUTH_CONTAINER_NAME}.rule=Host(\`api.${DOMAIN}\`)" \
+        --label "traefik.http.routers.${AUTH_CONTAINER_NAME}.entrypoints=websecure" \
+        --label "traefik.http.routers.${AUTH_CONTAINER_NAME}.tls=true" \
+        --label "traefik.http.services.${AUTH_CONTAINER_NAME}.loadbalancer.server.port=${AUTH_PORT:-8787}" \
+        "${GHCR_IMAGE}" run start:auth
+else
+    echo "⚠️  AUTH_SIGNING_KEY is unset, so no auth service was deployed."
+    echo "    The site can only run with GAME_ENV=dev in that state -- outside"
+    echo "    dev, verifyClientToken rejects every connection. Generate a key"
+    echo "    with scripts/generateAuthKey.ts and point AUTH_SIGNING_KEY at it."
+fi
+
+if [ $MAIN_STATUS -eq 0 ]; then
     echo "Update complete! New ${CONTAINER_NAME} container is running."
 
     # Final cleanup after successful deployment

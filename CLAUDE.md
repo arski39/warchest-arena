@@ -9,6 +9,8 @@ npm run inst             # Install deps (uses npm ci --ignore-scripts — do NOT
 npm run dev              # Run client + server in dev mode with hot reload
 npm run start:client     # Client only
 npm run start:server-dev # Server only
+npm run dev:auth         # Client + server + the fork's auth service (real JWTs)
+npm run start:auth       # Auth service only (src/auth, see docs/Auth.md)
 npm test                 # Run all tests (Vitest)
 npm run test:coverage    # Tests with coverage
 npm run lint             # Oxlint + ESLint
@@ -31,7 +33,7 @@ OpenFront.io is a real-time multiplayer territorial strategy game. There are fou
 1. **`src/core/`** — Deterministic game simulation. Pure TypeScript with **no external dependencies**. Must remain fully deterministic (seeded PRNG, no floating-point math). Runs in a Web Worker thread. All `src/core` changes **must** include tests.
 2. **`src/client/`** — Rendering (Pixi.js/WebGL), UI (Lit web components + Tailwind CSS 4), WebSocket communication.
 3. **`src/server/`** — Game coordination, intent relay, WebSocket management (Node.js/Express/ws).
-4. **API** — Closed-source Cloudflare Worker handling auth, stats, cosmetics, monetization. Not in this repo.
+4. **API** — Upstream's is a closed-source Cloudflare Worker handling auth, stats, cosmetics and monetization, and it is not in this repo. **This fork ships its own replacement for the auth half in `src/auth/`** — JWKS, `/auth/refresh`, `/users/@me` and wallet login, stateless, run as a second container at `api.$DOMAIN`. Everything else upstream's API served (matchmaking, leaderboards, cosmetics catalogues, Stripe) is absent, and every caller of those already fails open. See `docs/Auth.md`.
 
 ### Simulation Flow (Intent → Execution)
 

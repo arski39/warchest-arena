@@ -148,15 +148,30 @@ grep -rln "\[ARENA\]" src/ index.html tests/ resources/ | grep -v "/arena/" | so
 ### Files we own outright (absent upstream — merges never conflict)
 
 ```
-src/core/arena/     arenaProgram.ts (bindings, decoder, ix builders), authMessage.ts
-src/server/arena/   auth.ts, matchCreator.ts, matchRegistry.ts, rpcClient.ts,
-                    serverKeypair.ts, settler.ts, walletRegistry.ts
+src/auth/           AuthServer.ts, AuthEnv.ts, AuthLogger.ts, http.ts,
+                    identity.ts, routes.ts, signingKey.ts, tokens.ts,
+                    userMe.ts        <- the whole directory is ours (H4)
+src/core/arena/     arenaProgram.ts (bindings, decoder, ix builders),
+                    authMessage.ts, walletSignature.ts
+src/server/arena/   auth.ts, devBypass.ts, matchCreator.ts, matchRegistry.ts,
+                    preflight.ts, rpcClient.ts, serverKeypair.ts, settler.ts,
+                    sweeper.ts, walletRegistry.ts
 src/client/arena/   WagerLobby.ts, WalletProvider.ts, onchainJoin.ts,
                     wagerJoinFlow.ts, walletAuth.ts
-tests/              ArenaWalletAuth.test.ts, server/ArenaStartGate.test.ts,
+scripts/            generateAuthKey.ts
+tests/              ArenaWalletAuth.test.ts, server/ArenaDevBypass.test.ts,
+                    server/ArenaPreflight.test.ts, server/ArenaStartGate.test.ts,
+                    server/ArenaSweeper.test.ts, server/AuthService.test.ts,
                     server/AppShellBranding.test.ts
 docs/               branding.md, this file
 ```
+
+`src/auth/` is a **separate process in a separate container** and must never
+import `src/server/` — `ServerEnv` throws for vars it has no business setting
+(`NUM_WORKERS`, `GIT_COMMIT`, `TURNSTILE_SITE_KEY`) and `server/Logger.ts` wires
+OpenTelemetry at import time. It shares only `src/core/` with the game, which is
+the point: `TokenPayloadSchema` and `UserMeResponseSchema` are literally the
+same module on both ends of the contract.
 
 ### Upstream files we edit (every edit marked `// [ARENA]`)
 
@@ -173,7 +188,7 @@ since Stage 2 — this is the real list. Counts are `[ARENA]` markers, not lines
 | `src/core/Schemas.ts`              |     4 | wallet fields on `ClientJoinMessage`; `MAX_GAME_DURATION_MS` hoisted out of `GameServer`'s private field so the sweeper can derive its window from it                                                                              |
 | `src/client/ClientEnv.ts`          |     4 | `sourceRepoUrl()` with the empty-string fallback; `arenaDevBypass()`                                                                                                                                                               |
 | `src/client/Api.ts`                |     4 | `fetchLobbyWager`                                                                                                                                                                                                                  |
-| `src/server/ServerEnv.ts`          |     3 | `siteOrigin()`, `siteName()`, `sourceRepoUrl()`, `warnIfSourceRepoUnset()`                                                                                                                                                         |
+| `src/server/ServerEnv.ts`          |     4 | `siteOrigin()`, `siteName()`, `sourceRepoUrl()`, `warnIfSourceRepoUnset()`; `JwksSchema` exported so the auth suite pins the real schema instead of a copy                                                                         |
 | `src/server/RenderHtml.ts`         |     3 | those three vars plus `arenaDevBypass`; logos repointed off the removed proprietary PNGs                                                                                                                                           |
 | `src/client/ClientGameRunner.ts`   |     3 | `wager_lobby_not_full` and `kick_reason.wager_not_full` handling                                                                                                                                                                   |
 | `src/core/configuration/Config.ts` |     2 | `sourceRepoUrl` and `arenaDevBypass` on `BOOTSTRAP_CONFIG`                                                                                                                                                                         |
@@ -181,6 +196,19 @@ since Stage 2 — this is the real list. Counts are `[ARENA]` markers, not lines
 | `src/server/GameManager.ts`        |     1 | `cancelUnfilledWageredMatch()` in `tick()`                                                                                                                                                                                         |
 | `src/client/components/Footer.ts`  |     1 | source link from `ClientEnv.sourceRepoUrl()`                                                                                                                                                                                       |
 | `src/client/Transport.ts`          |     1 | wallet fields threaded into the join message                                                                                                                                                                                       |
+
+### Non-TypeScript upstream files we edit
+
+These carry no `// [ARENA]` marker (shell, JSON, dotfiles), so they are listed
+rather than counted. All are merge targets.
+
+| File           | What we changed                                                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy.sh`    | the fixed env heredoc gained every `ARENA_*` / `SOLANA_*` / `AUTH_*` var — it is a literal list, so an unlisted var never reaches the container                                                     |
+| `update.sh`    | read-only bind mounts for the arena authority keypair and the auth signing key; `SERVER_KEYPAIR_PATH` appended; `RESTART=always` forced when wagering is on; the second container for `api.$DOMAIN` |
+| `package.json` | `start:auth`, `start:auth-dev`, `dev:auth`                                                                                                                                                          |
+| `example.env`  | the arena and auth blocks                                                                                                                                                                           |
+| `.gitignore`   | `.keys/`, `*signing-key*.json`, `*keypair*.json`                                                                                                                                                    |
 
 ### Deletions
 

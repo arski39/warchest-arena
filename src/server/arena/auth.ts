@@ -1,36 +1,22 @@
-import { PublicKey } from "@solana/web3.js";
-import nacl from "tweetnacl";
 import type { TokenPayload } from "../../core/ApiSchemas";
 import { authMessage, devAuthNonce } from "../../core/arena/authMessage";
+import { verifyEd25519Signature } from "../../core/arena/walletSignature";
 import { devBypassEnabled, logBypassUse } from "./devBypass";
 
 /**
  * Returns true when the wallet identified by walletAddress (base58) signed
  * the canonical auth message containing nonce, and the signature (base64) is valid.
+ *
+ * The verification itself moved to core/arena/walletSignature.ts when the auth
+ * service's wallet login became a second caller — this is now only the choice
+ * of which message is being proved.
  */
 export function verifyWalletSig(
   nonce: string,
   walletAddress: string,
   sigBase64: string | undefined,
 ): boolean {
-  if (!sigBase64) return false;
-  try {
-    // Uint8Array.from on each argument: tweetnacl type-checks with instanceof,
-    // which is false for an array from another JS realm — and the catch below
-    // would turn that into a plain "invalid signature" rather than the bug it
-    // is. Node's TextEncoder is same-realm, but jsdom's is not, so without this
-    // the function cannot be tested against the client half at all.
-    const message = Uint8Array.from(
-      new TextEncoder().encode(authMessage(nonce)),
-    );
-    const pubkeyBytes = Uint8Array.from(new PublicKey(walletAddress).toBytes());
-    const sigBytes = Uint8Array.from(Buffer.from(sigBase64, "base64"));
-    return nacl.sign.detached.verify(message, sigBytes, pubkeyBytes);
-  } catch {
-    // Reached for a malformed address or base64 payload — both are ordinary
-    // bad input from an untrusted client, not an error worth propagating.
-    return false;
-  }
+  return verifyEd25519Signature(authMessage(nonce), walletAddress, sigBase64);
 }
 
 /**

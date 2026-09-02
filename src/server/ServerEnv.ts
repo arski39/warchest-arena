@@ -4,7 +4,9 @@ import { GameEnv, parseGameEnv } from "../core/configuration/Config";
 import { GameID } from "../core/Schemas";
 import { generateID, simpleHash } from "../core/Util";
 
-const JwksSchema = z.object({
+// [ARENA] exported so tests can pin the auth service's JWKS body against the
+// schema the game server actually enforces, rather than a copy of it.
+export const JwksSchema = z.object({
   keys: z
     .object({
       alg: z.literal("EdDSA"),
