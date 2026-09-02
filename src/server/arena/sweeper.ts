@@ -28,7 +28,7 @@ import { arenaProgramId } from "./matchCreator";
 import { wageringOperational } from "./preflight";
 import { connection } from "./rpcClient";
 import { serverKeypair } from "./serverKeypair";
-import { cancelAndRefund } from "./settler";
+import { cancelAndRefund, closeMatchAccount } from "./settler";
 
 /**
  * How old an `Open` escrow must be before the sweeper treats it as abandoned.
@@ -53,11 +53,23 @@ export const OPEN_SWEEP_AFTER_MS = MAX_GAME_DURATION_MS + 60 * 60 * 1000;
 /** How often the master re-scans. An orphan waits at most this long extra. */
 export const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
+/**
+ * Ceiling on close_match transactions per sweep.
+ *
+ * The first sweep after close_match ships faces every terminal match this key
+ * ever created, and firing hundreds of transactions at once would be a poor
+ * way to meet an RPC provider. Each close returns more rent than its fee, so
+ * the backlog is worth clearing — just not all in one breath.
+ */
+export const MAX_CLOSES_PER_SWEEP = 20;
+
 export interface SweepOutcome {
   /** Accounts the status-filtered queries returned. */
   scanned: number;
   /** Orphans successfully cancelled and refunded. */
   refunded: number;
+  /** Terminal matches closed, returning their rent to the authority. */
+  closed: number;
   /** Orphans that failed to decode or to cancel. Retried next sweep. */
   failed: number;
 }
@@ -98,18 +110,21 @@ export function isOrphaned(match: MatchAccountView, nowMs: number): boolean {
 export async function sweepOrphanedMatches(
   nowMs: number = Date.now(),
 ): Promise<SweepOutcome> {
-  const outcome: SweepOutcome = { scanned: 0, refunded: 0, failed: 0 };
+  const outcome: SweepOutcome = {
+    scanned: 0,
+    refunded: 0,
+    closed: 0,
+    failed: 0,
+  };
 
   const programId = arenaProgramId();
   if (programId === null) return outcome;
   const authority = serverKeypair().publicKey;
 
-  // Two queries, not one: getProgramAccounts AND-s its filters and offers no
-  // OR, so each actionable status is asked for separately. Worth the extra
-  // round trip — cancel_match sets status to Cancelled but never closes the
-  // account, and there is no close instruction at all, so the terminal set
-  // grows without bound for the life of the authority key. Filtering it out
-  // server-side is what keeps a sweep the same size in year two as on day one.
+  // One query per status, not one query: getProgramAccounts AND-s its filters
+  // and offers no OR. Worth the extra round trips — a terminal match stays on
+  // chain until close_match removes it, and the reclaim pass below is what
+  // stops that set growing without bound for the life of the authority key.
   const candidates = [
     ...(await matchesWithStatus(programId, authority, MatchStatus.Open)),
     ...(await matchesWithStatus(programId, authority, MatchStatus.InProgress)),
@@ -150,7 +165,58 @@ export async function sweepOrphanedMatches(
     }
   }
 
+  await reclaimTerminalMatches(programId, authority, outcome);
+
   return outcome;
+}
+
+/**
+ * Close matches that can no longer move money, returning their rent.
+ *
+ * A separate pass rather than part of the loop above, because the two are
+ * answering different questions: that one asks whether an escrow has been
+ * abandoned, this one only tidies up after escrows that are already finished.
+ * Matches cancelled by this very sweep are picked up on the next one — the
+ * queries ran before them — which costs nothing and keeps the pass simple.
+ *
+ * A close that fails is not retried within the sweep. The usual cause is a
+ * vault somebody donated into, which cancel_match leaves non-empty and no
+ * amount of retrying will change; it is logged once per sweep and skipped.
+ */
+async function reclaimTerminalMatches(
+  programId: PublicKey,
+  authority: PublicKey,
+  outcome: SweepOutcome,
+): Promise<void> {
+  const terminal = [
+    ...(await matchesWithStatus(programId, authority, MatchStatus.Settled)),
+    ...(await matchesWithStatus(programId, authority, MatchStatus.Cancelled)),
+  ];
+
+  for (const { pubkey, account } of terminal.slice(0, MAX_CLOSES_PER_SWEEP)) {
+    let match: MatchAccountView;
+    try {
+      match = decodeMatchAccount(account.data, account.owner, programId);
+    } catch {
+      // Already counted and logged by the orphan pass if it appeared there;
+      // an undecodable terminal account is not actionable either way.
+      continue;
+    }
+    try {
+      const txSig = await closeMatchAccount(programId, pubkey, match);
+      outcome.closed++;
+      console.log(
+        `[arena/sweeper] closed ${MatchStatus[match.status]} match ` +
+          `${pubkey.toBase58()}, rent returned tx=${txSig}`,
+      );
+    } catch (e) {
+      console.warn(
+        `[arena/sweeper] could not close ${pubkey.toBase58()} ` +
+          `(a donated-into vault is never empty and never will be): ` +
+          `${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
 }
 
 async function matchesWithStatus(
@@ -240,10 +306,11 @@ async function runSweep(): Promise<void> {
   }
   inFlight = true;
   try {
-    const { scanned, refunded, failed } = await sweepOrphanedMatches();
-    if (refunded > 0 || failed > 0) {
+    const { scanned, refunded, closed, failed } = await sweepOrphanedMatches();
+    if (refunded > 0 || closed > 0 || failed > 0) {
       console.log(
-        `[arena/sweeper] swept ${scanned} unfinished escrows: ${refunded} refunded, ${failed} failed`,
+        `[arena/sweeper] swept ${scanned} unfinished escrows: ${refunded} ` +
+          `refunded, ${failed} failed; ${closed} finished matches closed`,
       );
     }
   } catch (e) {

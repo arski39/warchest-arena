@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import nacl from "tweetnacl";
 import {
   buildCancelMatchIx,
+  buildCloseMatchIx,
   buildCreateAtaIdempotentIx,
   buildEd25519VerifyIx,
   buildSettleMatchIx,
@@ -234,6 +235,7 @@ async function payOut(
     .add(
       buildSettleMatchIx({
         programId: new PublicKey(wager.programId),
+        authority: authority.publicKey,
         matchPda,
         vault: new PublicKey(wager.vault),
         winnerToken,
@@ -290,6 +292,40 @@ export async function cancelAndRefund(
         // ever succeed, and the sweeper has no registry entry to read anyway.
         vault: match.vault,
         refundTokenAccounts,
+      }),
+    ),
+    [authority],
+    { commitment: "confirmed" },
+  );
+}
+
+/**
+ * [ARENA] Closes a finished match and its empty vault, returning both rents to
+ * the authority.
+ *
+ * Worth doing rather than leaving the account behind: nothing else removes a
+ * terminal match, so without this every match this key ever created holds its
+ * rent forever and stays in the sweeper's getProgramAccounts scan for the life
+ * of the key.
+ *
+ * The program refuses a vault that still holds tokens, which is reachable —
+ * cancel_match refunds `stakes`, not the balance, so a match somebody donated
+ * into keeps a residue. The caller treats that as a per-match failure.
+ */
+export async function closeMatchAccount(
+  programId: PublicKey,
+  matchPda: PublicKey,
+  match: MatchAccountView,
+): Promise<string> {
+  const authority = serverKeypair();
+  return await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(
+      buildCloseMatchIx({
+        programId,
+        authority: authority.publicKey,
+        matchPda,
+        vault: match.vault,
       }),
     ),
     [authority],

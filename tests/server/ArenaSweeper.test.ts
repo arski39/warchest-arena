@@ -43,7 +43,11 @@ vi.mock("../../src/server/arena/serverKeypair", () => ({
 // The refund mechanics belong to settler.ts and are proven in bankrun. What
 // matters here is that the sweeper hands it the right escrow.
 const cancelAndRefund = vi.hoisted(() => vi.fn());
-vi.mock("../../src/server/arena/settler", () => ({ cancelAndRefund }));
+const closeMatchAccount = vi.hoisted(() => vi.fn());
+vi.mock("../../src/server/arena/settler", () => ({
+  cancelAndRefund,
+  closeMatchAccount,
+}));
 
 const wageringOperational = vi.hoisted(() => vi.fn(() => true));
 vi.mock("../../src/server/arena/preflight", () => ({ wageringOperational }));
@@ -95,13 +99,21 @@ function account(opts: MatchOpts, pubkey = Keypair.generate().publicKey) {
 }
 
 /**
- * Answers the two status-filtered queries in the order the sweeper makes them:
- * Open first, then InProgress.
+ * Answers the four status-filtered queries in the order the sweeper makes
+ * them: Open and InProgress for the orphan scan, then Settled and Cancelled
+ * for the rent-reclaim pass.
  */
-function respondWith(open: unknown[], inProgress: unknown[] = []) {
+function respondWith(
+  open: unknown[],
+  inProgress: unknown[] = [],
+  settled: unknown[] = [],
+  cancelled: unknown[] = [],
+) {
   getProgramAccounts
     .mockResolvedValueOnce(open)
-    .mockResolvedValueOnce(inProgress);
+    .mockResolvedValueOnce(inProgress)
+    .mockResolvedValueOnce(settled)
+    .mockResolvedValueOnce(cancelled);
 }
 
 async function load() {
@@ -114,6 +126,7 @@ describe("[ARENA] recovery sweeper", () => {
     vi.stubEnv("ARENA_PROGRAM_ID", PROGRAM_ID.toBase58());
     serverKeypair.mockReturnValue(AUTHORITY);
     cancelAndRefund.mockResolvedValue("tx-signature");
+    closeMatchAccount.mockResolvedValue("close-tx-signature");
     wageringOperational.mockReturnValue(true);
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -126,6 +139,7 @@ describe("[ARENA] recovery sweeper", () => {
     vi.useRealTimers();
     getProgramAccounts.mockReset();
     cancelAndRefund.mockReset();
+    closeMatchAccount.mockReset();
   });
 
   describe("the Open window", () => {
@@ -221,19 +235,26 @@ describe("[ARENA] recovery sweeper", () => {
   });
 
   describe("what it asks the chain for", () => {
-    it("queries each actionable status separately and no others", async () => {
-      // getProgramAccounts AND-s its filters and has no OR, so this is two
-      // queries by necessity — and Settled/Cancelled must never be among them:
-      // nothing closes those accounts, so that set grows forever.
+    it("queries each status separately, and in two distinct passes", async () => {
+      // getProgramAccounts AND-s its filters and has no OR, so one query per
+      // status is a necessity rather than a choice. The order encodes the two
+      // jobs: Open and InProgress are the orphan scan, Settled and Cancelled
+      // are the rent reclaim — and the second only exists because close_match
+      // does. Without it that terminal set would grow forever.
       const { sweepOrphanedMatches } = await load();
       respondWith([], []);
       await sweepOrphanedMatches(NOW);
 
-      expect(getProgramAccounts).toHaveBeenCalledTimes(2);
+      expect(getProgramAccounts).toHaveBeenCalledTimes(4);
       const asked = getProgramAccounts.mock.calls.map((c) =>
         statusFilterOf(c[1] as StatusQuery),
       );
-      expect(asked).toEqual([MatchStatus.Open, MatchStatus.InProgress]);
+      expect(asked).toEqual([
+        MatchStatus.Open,
+        MatchStatus.InProgress,
+        MatchStatus.Settled,
+        MatchStatus.Cancelled,
+      ]);
     });
 
     it("scopes the query to this authority's own matches", async () => {
@@ -261,7 +282,12 @@ describe("[ARENA] recovery sweeper", () => {
       const outcome = await sweepOrphanedMatches(NOW);
 
       expect(getProgramAccounts).not.toHaveBeenCalled();
-      expect(outcome).toEqual({ scanned: 0, refunded: 0, failed: 0 });
+      expect(outcome).toEqual({
+        scanned: 0,
+        refunded: 0,
+        closed: 0,
+        failed: 0,
+      });
     });
   });
 
@@ -280,7 +306,12 @@ describe("[ARENA] recovery sweeper", () => {
 
       const outcome = await sweepOrphanedMatches(NOW);
 
-      expect(outcome).toEqual({ scanned: 2, refunded: 1, failed: 0 });
+      expect(outcome).toEqual({
+        scanned: 2,
+        refunded: 1,
+        closed: 0,
+        failed: 0,
+      });
       expect(cancelAndRefund).toHaveBeenCalledTimes(1);
       const [programId, matchPda] = cancelAndRefund.mock.calls[0] as [
         PublicKey,
@@ -350,7 +381,12 @@ describe("[ARENA] recovery sweeper", () => {
 
       const outcome = await sweepOrphanedMatches(NOW);
 
-      expect(outcome).toEqual({ scanned: 2, refunded: 1, failed: 1 });
+      expect(outcome).toEqual({
+        scanned: 2,
+        refunded: 1,
+        closed: 0,
+        failed: 1,
+      });
     });
 
     it("keeps going when an account does not decode", async () => {
@@ -369,7 +405,12 @@ describe("[ARENA] recovery sweeper", () => {
 
       const outcome = await sweepOrphanedMatches(NOW);
 
-      expect(outcome).toEqual({ scanned: 2, refunded: 1, failed: 1 });
+      expect(outcome).toEqual({
+        scanned: 2,
+        refunded: 1,
+        closed: 0,
+        failed: 1,
+      });
     });
 
     it("refuses an account the arena program does not own", async () => {
@@ -385,8 +426,87 @@ describe("[ARENA] recovery sweeper", () => {
 
       const outcome = await sweepOrphanedMatches(NOW);
 
-      expect(outcome).toEqual({ scanned: 1, refunded: 0, failed: 1 });
+      expect(outcome).toEqual({
+        scanned: 1,
+        refunded: 0,
+        closed: 0,
+        failed: 1,
+      });
       expect(cancelAndRefund).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reclaiming rent from finished matches", () => {
+    it("closes terminal matches and counts them", async () => {
+      // Nothing else ever removes a terminal match, so without this pass every
+      // match the authority creates holds its rent forever and stays in the
+      // scan for the life of the key.
+      const { sweepOrphanedMatches } = await load();
+      const settled = Keypair.generate().publicKey;
+      const cancelled = Keypair.generate().publicKey;
+      respondWith(
+        [],
+        [],
+        [account({ status: MatchStatus.Settled, ageMs: HOUR }, settled)],
+        [account({ status: MatchStatus.Cancelled, ageMs: HOUR }, cancelled)],
+      );
+
+      const outcome = await sweepOrphanedMatches(NOW);
+
+      expect(outcome).toEqual({
+        scanned: 0,
+        refunded: 0,
+        closed: 2,
+        failed: 0,
+      });
+      expect(closeMatchAccount).toHaveBeenCalledTimes(2);
+      const closedPdas = closeMatchAccount.mock.calls.map((c) =>
+        (c[1] as PublicKey).toBase58(),
+      );
+      expect(closedPdas).toEqual([settled.toBase58(), cancelled.toBase58()]);
+      // Terminal matches are never refund candidates, whatever their age.
+      expect(cancelAndRefund).not.toHaveBeenCalled();
+    });
+
+    it("a close that cannot succeed does not stop the others", async () => {
+      // The realistic cause is a vault somebody donated into: cancel_match
+      // refunds `stakes`, not the balance, so it is never empty and the
+      // program will refuse it every sweep from now on.
+      const { sweepOrphanedMatches } = await load();
+      respondWith(
+        [],
+        [],
+        [
+          account({ status: MatchStatus.Settled, ageMs: HOUR }),
+          account({ status: MatchStatus.Settled, ageMs: HOUR }),
+        ],
+      );
+      closeMatchAccount
+        .mockRejectedValueOnce(new Error("VaultNotEmpty"))
+        .mockResolvedValueOnce("close-tx-signature");
+
+      const outcome = await sweepOrphanedMatches(NOW);
+
+      expect(outcome.closed).toBe(1);
+      expect(closeMatchAccount).toHaveBeenCalledTimes(2);
+      // Not counted as `failed`: that number is about pots still holding money.
+      expect(outcome.failed).toBe(0);
+    });
+
+    it("caps how many it closes in one sweep", async () => {
+      // The first sweep after close_match ships faces every terminal match the
+      // key ever created. Clearing the backlog is worth doing; doing it in one
+      // breath is not.
+      const { sweepOrphanedMatches, MAX_CLOSES_PER_SWEEP } = await load();
+      const many = Array.from({ length: MAX_CLOSES_PER_SWEEP + 5 }, () =>
+        account({ status: MatchStatus.Settled, ageMs: HOUR }),
+      );
+      respondWith([], [], many);
+
+      const outcome = await sweepOrphanedMatches(NOW);
+
+      expect(outcome.closed).toBe(MAX_CLOSES_PER_SWEEP);
+      expect(closeMatchAccount).toHaveBeenCalledTimes(MAX_CLOSES_PER_SWEEP);
     });
   });
 
@@ -406,10 +526,12 @@ describe("[ARENA] recovery sweeper", () => {
 
       startSweeper();
       await vi.advanceTimersByTimeAsync(0);
-      expect(getProgramAccounts).toHaveBeenCalledTimes(2); // one per status
+      // Four queries per sweep: one per status, across the orphan scan and the
+      // rent-reclaim pass.
+      expect(getProgramAccounts).toHaveBeenCalledTimes(4);
 
       await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
-      expect(getProgramAccounts).toHaveBeenCalledTimes(4);
+      expect(getProgramAccounts).toHaveBeenCalledTimes(8);
       stopSweeper();
     });
 

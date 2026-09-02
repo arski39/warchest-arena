@@ -67,6 +67,7 @@ export const MATCH_TIMEOUT_SECS = 86_400;
  */
 export const IX_DISCRIMINATOR = {
   cancel_match: Uint8Array.from([142, 136, 247, 45, 92, 112, 180, 83]),
+  close_match: Uint8Array.from([79, 174, 36, 80, 233, 185, 176, 239]),
   create_match: Uint8Array.from([107, 2, 184, 145, 70, 142, 17, 165]),
   join_match: Uint8Array.from([244, 8, 47, 130, 192, 59, 179, 44]),
   settle_match: Uint8Array.from([71, 124, 117, 96, 191, 217, 116, 24]),
@@ -471,15 +472,22 @@ export interface SettleMatchParams {
   winnerToken: PublicKey;
   /** Rake destination. Still a required account when rakeBps is 0. */
   treasuryToken: PublicKey;
+  /** Match authority. Must sign — see buildSettleMatchIx. */
+  authority: PublicKey;
   winner: PublicKey;
   /** Indexed against `MatchAccount.players[0..player_count]`, in join order. */
   scores: bigint[];
 }
 
 /**
- * Builds `settle_match`. Declares **no signer**: the server authorises through
- * the ed25519 prelude instruction above, not by signing this one. Passing the
- * server key as a signer here fails with `unknown signer`.
+ * Builds `settle_match`.
+ *
+ * The authority signs **and** attests through the ed25519 prelude above, and
+ * the two prove different things: the prelude proves what was attested, and is
+ * checkable by anyone holding the authority's pubkey, while the signature on
+ * this instruction proves who submitted it. Without the latter, anyone who saw
+ * a settle transaction could rebuild it with the same prelude and their own
+ * `winnerToken` — the digest names the winner, not the destination account.
  *
  * Args are Borsh: `winner: pubkey`, then `scores: Vec<u64>` as a u32 length
  * prefix followed by the little-endian elements.
@@ -487,7 +495,8 @@ export interface SettleMatchParams {
 export function buildSettleMatchIx(
   params: SettleMatchParams,
 ): TransactionInstruction {
-  const { programId, matchPda, vault, winnerToken, treasuryToken } = params;
+  const { programId, authority, matchPda, vault, winnerToken, treasuryToken } =
+    params;
 
   const lengthPrefix = new Uint8Array(4);
   new DataView(lengthPrefix.buffer).setUint32(0, params.scores.length, true);
@@ -502,6 +511,7 @@ export function buildSettleMatchIx(
   return new TransactionInstruction({
     programId,
     keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
       { pubkey: matchPda, isSigner: false, isWritable: true },
       { pubkey: vault, isSigner: false, isWritable: true },
       { pubkey: winnerToken, isSigner: false, isWritable: true },
@@ -530,7 +540,14 @@ export interface CancelMatchParams {
   refundTokenAccounts: PublicKey[];
 }
 
-/** Builds `cancel_match`: refunds every staker. Authority-only, Open only. */
+/**
+ * Builds `cancel_match`: refunds every staker. Authority-only. Accepts `Open`
+ * at any age and `InProgress` only past MATCH_TIMEOUT_SECS.
+ *
+ * The program validates each refund account against `players[i]` — owner and
+ * mint both — so a mis-ordered list is rejected rather than silently paying the
+ * wrong people.
+ */
 export function buildCancelMatchIx(
   params: CancelMatchParams,
 ): TransactionInstruction {
@@ -548,6 +565,37 @@ export function buildCancelMatchIx(
       })),
     ],
     data: Buffer.from(IX_DISCRIMINATOR.cancel_match),
+  });
+}
+
+export interface CloseMatchParams {
+  programId: PublicKey;
+  authority: PublicKey;
+  matchPda: PublicKey;
+  vault: PublicKey;
+}
+
+/**
+ * Builds `close_match`: closes a `Settled` or `Cancelled` match and its empty
+ * vault, returning both rents to the authority.
+ *
+ * Worth calling rather than leaving the account behind. Nothing else ever
+ * removes a terminal match, so without this every match the authority creates
+ * holds its rent forever and stays in the recovery sweeper's
+ * `getProgramAccounts` scan for the life of the key.
+ */
+export function buildCloseMatchIx(
+  params: CloseMatchParams,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: params.programId,
+    keys: [
+      { pubkey: params.authority, isSigner: true, isWritable: true },
+      { pubkey: params.matchPda, isSigner: false, isWritable: true },
+      { pubkey: params.vault, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(IX_DISCRIMINATOR.close_match),
   });
 }
 
