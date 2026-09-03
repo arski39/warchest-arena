@@ -30,6 +30,11 @@ export function promptWagerJoin(
     alignItems: "center",
     justifyContent: "center",
     background: "rgba(0, 0, 0, 0.72)",
+    // Matches the scrim the rest of the app uses (JoinLobbyModal's
+    // `backdrop-blur-md`). Inline rather than a Tailwind class because this
+    // element is built imperatively, outside any component's template.
+    backdropFilter: "blur(12px)",
+    padding: "1rem",
   } satisfies Partial<CSSStyleDeclaration>);
 
   const panel = document.createElement("arena-wager-lobby") as WagerLobby;

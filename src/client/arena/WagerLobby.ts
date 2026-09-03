@@ -1,9 +1,10 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { WagerInfo } from "../../core/Schemas";
 import { formatStake } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
+import "../components/baseComponents/Button";
 import { connectWallet, getConnectedWallet } from "./WalletProvider";
 import { joinMatchOnChain } from "./onchainJoin";
 import { signAuthMessage } from "./walletAuth";
@@ -22,13 +23,25 @@ export interface WagerJoinedDetail {
 }
 
 /**
- * Pre-game gate for a wagered lobby: shows the stake, then walks the player
- * through connect → sign auth → stake on-chain. Mounted by wagerJoinFlow.ts,
- * which resolves once one of the two events above fires.
+ * Pre-game gate for a wagered lobby: shows what is at stake, then walks the
+ * player through connect → sign auth → stake on-chain. Mounted by
+ * wagerJoinFlow.ts, which resolves once one of the two events above fires.
  *
  * Both the wallet signature and the on-chain stake are produced here because
  * the server checks them together, in the same ClientJoinMessage: the signature
  * proves the wallet belongs to this session, the transaction proves it staked.
+ *
+ * Renders into the LIGHT DOM, like every other component in this codebase
+ * (`BaseModal`, `o-button`, `GameConfigSettings`). It used to be the one
+ * shadow-DOM island, with a hand-written palette that matched nothing — so it
+ * missed every design token and could not use `o-button`. Tailwind classes only
+ * reach it here because there is no shadow boundary in the way.
+ *
+ * Pot-first on purpose: the number that decides whether someone plays is what
+ * the winner walks away with, not the row-of-labels the panel used to lead
+ * with. The stake, the seat count and the mint stay visible underneath — the
+ * mint especially, because ARENA_STAKE_SYMBOL is an operator string and not
+ * on-chain metadata, so the ticker alone is an unverifiable claim.
  */
 @customElement("arena-wager-lobby")
 export class WagerLobby extends LitElement {
@@ -39,6 +52,12 @@ export class WagerLobby extends LitElement {
   @state() private busy = false;
   @state() private status: string | null = null;
   @state() private error: string | null = null;
+
+  // Light DOM, so the page's Tailwind reaches this component. See the class
+  // comment: the shadow root is what kept it outside the design system.
+  createRenderRoot() {
+    return this;
+  }
 
   connectedCallback() {
     super.connectedCallback();
@@ -122,123 +141,101 @@ export class WagerLobby extends LitElement {
     const takes = formatStake(payout, decimals, symbol);
 
     return html`
-      <div class="wager-panel">
-        <div class="wager-header">${translateText("wager_lobby.title")}</div>
-        <p class="wager-note">${translateText("wager_lobby.description")}</p>
+      <div
+        class="w-[min(28rem,calc(100vw-2rem))] box-border rounded-2xl border
+               border-white/10 bg-surface p-6 text-white shadow-2xl"
+      >
+        <div
+          class="text-[10px] font-bold uppercase tracking-widest text-white/40"
+        >
+          ${translateText("wager_lobby.title")}
+        </div>
 
-        <div class="wager-row">
-          <span>${translateText("wager_lobby.entry_fee")}</span>
-          <span>${fee}</span>
+        <!-- The pot leads. It is the number that decides whether someone
+             plays, and it is the payout after rake, not the gross pot. -->
+        <div class="mt-4 text-center">
+          <div
+            class="text-[10px] font-bold uppercase tracking-widest text-white/40"
+          >
+            ${translateText("wager_lobby.winner_takes")}
+          </div>
+          <div
+            class="mt-1 text-4xl font-bold tracking-tight text-cyber-yellow
+                   break-all"
+          >
+            ${takes}
+          </div>
         </div>
-        <div class="wager-row">
-          <span>${translateText("wager_lobby.max_players")}</span>
-          <span>${maxPlayers}</span>
-        </div>
-        <div class="wager-row">
-          <span>${translateText("wager_lobby.winner_takes")}</span>
-          <span>${takes}</span>
-        </div>
-        <div class="wager-row muted">
-          <span>${translateText("wager_lobby.mint")}</span>
-          <span class="mono">${shorten(this.wager.mint)}</span>
-        </div>
+
+        <dl class="mt-5 space-y-2 text-sm">
+          <div class="flex justify-between gap-4">
+            <dt class="text-white/50">
+              ${translateText("wager_lobby.entry_fee")}
+            </dt>
+            <dd class="font-bold">${fee}</dd>
+          </div>
+          <div class="flex justify-between gap-4">
+            <dt class="text-white/50">
+              ${translateText("wager_lobby.max_players")}
+            </dt>
+            <dd class="font-bold">${maxPlayers}</dd>
+          </div>
+          <div class="flex justify-between gap-4 text-xs">
+            <dt class="text-white/40">${translateText("wager_lobby.mint")}</dt>
+            <dd class="font-mono text-white/40">${shorten(this.wager.mint)}</dd>
+          </div>
+        </dl>
+
+        <p class="mt-4 text-xs leading-relaxed text-white/40">
+          ${translateText("wager_lobby.description")}
+        </p>
 
         ${this.walletAddress
           ? html`
-              <div class="wallet-info mono">${shorten(this.walletAddress)}</div>
-              <button ?disabled=${this.busy} @click=${this.handleJoin}>
-                ${this.busy
+              <div class="mt-4 font-mono text-xs text-white/40">
+                ${shorten(this.walletAddress)}
+              </div>
+              <o-button
+                class="mt-2 block"
+                variant="primary"
+                width="fill"
+                .title=${this.busy
                   ? (this.status ??
                     translateText("wager_lobby.status_confirming"))
                   : translateText("wager_lobby.join_and_stake")}
-              </button>
+                ?disable=${this.busy}
+                @click=${this.handleJoin}
+              ></o-button>
             `
           : html`
-              <button ?disabled=${this.busy} @click=${this.handleConnect}>
-                ${translateText("wager_lobby.connect_wallet")}
-              </button>
+              <o-button
+                class="mt-4 block"
+                variant="primary"
+                width="fill"
+                .title=${translateText("wager_lobby.connect_wallet")}
+                ?disable=${this.busy}
+                @click=${this.handleConnect}
+              ></o-button>
             `}
-        <button
-          class="secondary"
-          ?disabled=${this.busy}
+        <o-button
+          class="mt-2 block"
+          variant="ghost"
+          size="sm"
+          width="fill"
+          .title=${translateText("wager_lobby.cancel")}
+          ?disable=${this.busy}
           @click=${this.handleCancel}
-        >
-          ${translateText("wager_lobby.cancel")}
-        </button>
-        ${this.error ? html`<div class="error">${this.error}</div>` : ""}
+        ></o-button>
+        ${this.error
+          ? html`<div
+              class="mt-3 text-xs text-red-400 [overflow-wrap:anywhere]"
+            >
+              ${this.error}
+            </div>`
+          : ""}
       </div>
     `;
   }
-
-  static styles = css`
-    .wager-panel {
-      background: #1a1a2e;
-      border: 1px solid #e94560;
-      border-radius: 8px;
-      padding: 1.25rem;
-      color: #eee;
-      font-family: sans-serif;
-      width: min(28rem, calc(100vw - 2rem));
-      box-sizing: border-box;
-    }
-    .wager-header {
-      font-weight: bold;
-      color: #e94560;
-      margin-bottom: 0.5rem;
-    }
-    .wager-note {
-      color: #aaa;
-      font-size: 0.8rem;
-      margin: 0 0 0.9rem;
-      line-height: 1.4;
-    }
-    .wager-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 1rem;
-      margin-bottom: 0.4rem;
-      font-size: 0.9rem;
-    }
-    .wager-row.muted {
-      color: #888;
-      font-size: 0.8rem;
-    }
-    .mono {
-      font-family: ui-monospace, monospace;
-    }
-    .wallet-info {
-      font-size: 0.8rem;
-      color: #aaa;
-      margin: 0.75rem 0 0;
-    }
-    button {
-      width: 100%;
-      padding: 0.6rem;
-      background: #e94560;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 1rem;
-      margin-top: 0.5rem;
-    }
-    button.secondary {
-      background: transparent;
-      border: 1px solid #ffffff33;
-      color: #bbb;
-      font-size: 0.85rem;
-    }
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    .error {
-      color: #ff6b6b;
-      font-size: 0.8rem;
-      margin-top: 0.6rem;
-      overflow-wrap: anywhere;
-    }
-  `;
 }
 
 function shorten(address: string): string {
