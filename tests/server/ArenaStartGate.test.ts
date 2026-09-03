@@ -44,6 +44,8 @@ function wager(overrides: Partial<WagerConfig> = {}): WagerConfig {
     rakeBps: 0,
     nonce: 7n,
     programId: "11111111111111111111111111111114",
+    decimals: 6,
+    symbol: "ARENA",
     ...overrides,
   };
 }

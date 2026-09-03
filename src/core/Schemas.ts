@@ -269,8 +269,30 @@ export const WagerInfoSchema = z.object({
   // Public RPC endpoint. See ARENA_PUBLIC_RPC_URL in example.env — this value
   // reaches every joining browser, so it must not carry an API key.
   rpcUrl: z.string(),
+  // Denomination of entryFee, so the stake prompt can show "5 ARENA" instead
+  // of "5000000". Recorded per-match server-side; see WagerConfig.
+  decimals: z.number().int().min(0).max(9),
+  // Display only, and an operator claim rather than on-chain metadata — which
+  // is why the mint address stays visible beside it in the stake prompt.
+  // Bounded because it reaches every browser.
+  symbol: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,12}$/)
+    .or(z.literal("")),
 });
 export type WagerInfo = z.infer<typeof WagerInfoSchema>;
+
+// [ARENA] What a host may stake, offered before any escrow exists — so this
+// cannot live on WagerInfo, which is per-match and absent until one does.
+// Present on GET /api/game/:id only while preflight reports ok.
+export const WagerOptionsSchema = z.object({
+  /** The tiers this deployment offers, in whole tokens, already cap-filtered. */
+  tiers: z.array(z.number().int().positive()),
+  mint: z.string(),
+  decimals: z.number().int().min(0).max(9),
+  symbol: z.string(),
+});
+export type WagerOptions = z.infer<typeof WagerOptionsSchema>;
 
 export const GameInfoSchema = z.object({
   gameID: z.string(),

@@ -106,9 +106,22 @@ export function entryFeeWithinCap(entryFee: bigint): boolean {
 }
 
 export interface CreateWageredMatchInput {
+  // [ARENA] mint and entryFee are no longer host inputs. Both are derived
+  // server-side from the resolved stake token and the chosen tier — see
+  // stakeMint.ts's resolveTierEntryFee. They stay parameters rather than being
+  // read from stakeMint() here so this module keeps its single direction of
+  // dependency (stakeMint imports matchCreator for the cap, not the reverse).
   mint: string;
   entryFee: bigint;
   maxPlayers: number;
+  /**
+   * Recorded per-match for the same reason `programId` is: so `toWagerInfo` is
+   * a pure function of the config rather than a reader of current global state.
+   * An operator who repoints ARENA_STAKE_MINT must not change how an escrow
+   * that is already live is displayed or decoded.
+   */
+  decimals: number;
+  symbol: string;
 }
 
 /**
@@ -168,6 +181,8 @@ export async function createWageredMatch(
     rakeBps,
     nonce,
     programId: programId.toBase58(),
+    decimals: config.decimals, // [ARENA]
+    symbol: config.symbol, // [ARENA]
   };
   matchRegistry.register(gameId, wager);
   console.log(

@@ -12,6 +12,16 @@ export interface WagerConfig {
   // read from config at join time: repointing ARENA_PROGRAM_ID must not send a
   // joining player's stake to a different program than the one holding the pot.
   programId: string;
+  // [ARENA] Denomination of `entryFee`, recorded per-match for exactly the same
+  // reason as `programId` above. It makes toWagerInfo() a pure function of this
+  // config rather than a reader of whatever ARENA_STAKE_MINT currently says.
+  //
+  // Do NOT "simplify" `mint` to a call to stakeMint(): verifyOnchainMembership
+  // compares the on-chain match's mint against THIS value, so an operator who
+  // repointed the stake token would kick every player of every live match.
+  decimals: number;
+  /** Display only. Empty when ARENA_STAKE_SYMBOL is unset. */
+  symbol: string;
 }
 
 /**
@@ -28,6 +38,9 @@ export interface WagerInfo {
   rakeBps: number;
   programId: string;
   rpcUrl: string;
+  // [ARENA] So the browser can render "5 ARENA" rather than "5000000".
+  decimals: number;
+  symbol: string;
 }
 
 /**
@@ -54,6 +67,8 @@ export function toWagerInfo(config: WagerConfig): WagerInfo {
     rakeBps: config.rakeBps,
     programId: config.programId,
     rpcUrl: publicRpcUrl(),
+    decimals: config.decimals,
+    symbol: config.symbol,
   };
 }
 

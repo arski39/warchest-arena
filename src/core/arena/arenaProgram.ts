@@ -418,6 +418,152 @@ export function decodeMatchAccount(
   };
 }
 
+/**
+ * Byte layout of a legacy SPL Token `Mint`. Exactly 82 bytes:
+ *
+ * ```text
+ *   0..4    mint_authority COption tag
+ *   4..36   mint_authority
+ *  36..44   supply (u64)
+ *  44       decimals (u8)
+ *  45       is_initialized (bool)
+ *  46..50   freeze_authority COption tag
+ *  50..82   freeze_authority
+ * ```
+ *
+ * Transcribed from `@solana/spl-token`'s `MintLayout`, which is a root
+ * dependency (`tests/arena.ts` uses it) but deliberately NOT a dependency of
+ * OpenFrontIO — this module ships to the browser, and the arena avoids client
+ * deps it can hand-roll. Same reasoning as `MATCH_ACCOUNT_LAYOUT` above.
+ */
+export const MINT_ACCOUNT_SIZE = 82;
+
+const MINT_LAYOUT = {
+  supply: 36,
+  decimals: 44,
+  isInitialized: 45,
+  freezeAuthorityTag: 46,
+} as const;
+
+/** A mint account that failed validation before any field was trusted. */
+export class MintAccountDecodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MintAccountDecodeError";
+  }
+}
+
+export interface MintAccountView {
+  decimals: number;
+  /**
+   * A freeze authority can freeze the vault ATA or a player's ATA, at which
+   * point BOTH `settle_match` and `cancel_match` fail on the transfer and the
+   * stakes have no on-chain path out at all — H3's timeout-cancel does not
+   * help, because it is the transfer itself that fails. Surfaced so the
+   * operator can decide; see `stakeMint.ts`.
+   */
+  hasFreezeAuthority: boolean;
+  supply: bigint;
+}
+
+/**
+ * Decodes an SPL mint from raw account bytes.
+ *
+ * Pure, like `decodeMatchAccount`, so the root bankrun suite can feed it a mint
+ * the token program actually created rather than a fixture that merely
+ * round-trips.
+ *
+ * **The owner check is the load-bearing one, twice over.** Without it any
+ * 82-byte account decodes into a plausible mint. And because the arena program
+ * pins `Program<'info, Token>`, requiring the *legacy* token program here is
+ * also what rejects a Token-2022 mint the escrow could never hold — moving that
+ * failure from a rejected `create_match` on a live lobby to a boot refusal.
+ *
+ * Excluding Token-2022 has a second consequence worth writing down so nobody
+ * re-derives it: transfer-fee and transfer-hook extensions cannot apply to a
+ * stake token here, because those are Token-2022 extensions. Mint authority and
+ * supply are irrelevant to escrow safety and are not checked.
+ */
+export function decodeMintAccount(
+  data: Uint8Array,
+  owner: PublicKey,
+): MintAccountView {
+  if (!owner.equals(TOKEN_PROGRAM_ID)) {
+    throw new MintAccountDecodeError(
+      `mint is owned by ${owner.toBase58()}, not the SPL Token program ` +
+        `${TOKEN_PROGRAM_ID.toBase58()} — a Token-2022 mint cannot be escrowed ` +
+        `by this program`,
+    );
+  }
+  if (data.length !== MINT_ACCOUNT_SIZE) {
+    throw new MintAccountDecodeError(
+      `expected ${MINT_ACCOUNT_SIZE} bytes, got ${data.length}`,
+    );
+  }
+
+  // An uninitialized account of the right size and owner decodes as
+  // `decimals = 0`, which would silently turn every tier into 1/5/25 *base
+  // units* — a stake of 0.000001 tokens that looks completely normal.
+  const isInitialized = data[MINT_LAYOUT.isInitialized]!;
+  if (isInitialized !== 1) {
+    throw new MintAccountDecodeError("mint is not initialized");
+  }
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    decimals: data[MINT_LAYOUT.decimals]!,
+    hasFreezeAuthority:
+      view.getUint32(MINT_LAYOUT.freezeAuthorityTag, true) === 1,
+    supply: view.getBigUint64(MINT_LAYOUT.supply, true),
+  };
+}
+
+/**
+ * Byte layout of a legacy SPL token *account* (165 bytes): `mint` 0..32,
+ * `owner` 32..64, `amount` 64..72. The rest (delegate, state, is_native,
+ * delegated_amount, close_authority) is not needed here.
+ */
+export const TOKEN_ACCOUNT_SIZE = 165;
+
+export interface TokenAccountView {
+  mint: PublicKey;
+  owner: PublicKey;
+  amount: bigint;
+}
+
+/**
+ * Decodes an SPL token account. Same owner/length discipline as the two
+ * decoders above, and for the same reason: `TokenAccount::try_deserialize`
+ * would happily unpack any 165-byte account, which is exactly the hole
+ * `cancel_match` had before the security pass.
+ *
+ * Used at boot to check that `TREASURY_TOKEN_ACCOUNT` really holds the staking
+ * mint. `example.env` has always said it must, but nothing enforced it, and a
+ * mismatch is a pot-locking bug: `settle_match`'s rake transfer fails, so the
+ * whole settlement fails, and the stakes sit there until the 24h timeout.
+ */
+export function decodeTokenAccount(
+  data: Uint8Array,
+  owner: PublicKey,
+): TokenAccountView {
+  if (!owner.equals(TOKEN_PROGRAM_ID)) {
+    throw new MintAccountDecodeError(
+      `token account is owned by ${owner.toBase58()}, not the SPL Token program`,
+    );
+  }
+  if (data.length !== TOKEN_ACCOUNT_SIZE) {
+    throw new MintAccountDecodeError(
+      `expected ${TOKEN_ACCOUNT_SIZE} bytes, got ${data.length}`,
+    );
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    mint: new PublicKey(data.subarray(0, PUBKEY_SIZE)),
+    owner: new PublicKey(data.subarray(PUBKEY_SIZE, PUBKEY_SIZE * 2)),
+    amount: view.getBigUint64(PUBKEY_SIZE * 2, true),
+  };
+}
+
 //
 // Settlement
 //

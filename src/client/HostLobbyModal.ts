@@ -8,6 +8,7 @@ import {
   showToast,
   translateText,
 } from "../client/Utils";
+import { formatStake } from "../core/arena/stakeTiers"; // [ARENA]
 import { GameEnv } from "../core/configuration/Config";
 import { EventBus } from "../core/EventBus";
 import { DoomsdayClockSpeed } from "../core/game/DoomsdayClock";
@@ -25,6 +26,7 @@ import {
   LobbyInfoEvent,
   TeamCountConfig,
   WagerInfo, // [ARENA]
+  WagerOptions, // [ARENA]
   isValidGameID,
 } from "../core/Schemas";
 import {
@@ -128,9 +130,12 @@ export class HostLobbyModal extends BaseModal {
   // who already staked.
   @state() private wagerAvailable: boolean = false;
   @state() private wager: WagerInfo | null = null;
+  @state() private wagerOptions: WagerOptions | null = null;
   @state() private wagerEnabled: boolean = false;
-  @state() private wagerMint: string = "";
-  @state() private wagerEntryFee: string = "";
+  // [ARENA] A tier in whole tokens, not an amount. The host picks from
+  // `wagerOptions.tiers`, which the server has already filtered by
+  // ARENA_MAX_ENTRY_FEE; the mint is an operator setting and not a host input.
+  @state() private wagerTier: number | null = null;
   @state() private wagerMaxPlayers: number = 16;
   @state() private wagerRequestInFlight: boolean = false;
   @state() private wagerError: string | null = null;
@@ -305,6 +310,38 @@ export class HostLobbyModal extends BaseModal {
     if (!this.wagerAvailable || this.publiclyListed) return nothing;
 
     const attached = this.wager !== null;
+    // [ARENA] Decimals and symbol come from the escrow once one exists, and
+    // from the offered options before that — so the panel reads the same either
+    // side of attaching.
+    const decimals = this.wager?.decimals ?? this.wagerOptions?.decimals ?? 0;
+    const symbol = this.wager?.symbol ?? this.wagerOptions?.symbol ?? "";
+    // Divide as BigInt and only then narrow: entryFee is a u64 string, and
+    // Number() on it would be the very precision loss the string exists to
+    // avoid. The quotient is a tier, so it is tiny by the time it is a number.
+    const attachedTier =
+      this.wager !== null
+        ? Number(
+            BigInt(this.wager.entryFee) / 10n ** BigInt(this.wager.decimals),
+          )
+        : null;
+    // Show what the winner actually plays for. formatStake never touches
+    // Number: entryFee is a u64 string.
+    const potPreview = (() => {
+      const players = this.wager?.maxPlayers ?? this.wagerMaxPlayers;
+      const fee =
+        this.wager !== null
+          ? BigInt(this.wager.entryFee)
+          : this.wagerTier !== null
+            ? BigInt(this.wagerTier) * 10n ** BigInt(decimals)
+            : null;
+      if (fee === null) return nothing;
+      return html`<p class="text-white/50 text-xs mt-2">
+        ${translateText("host_modal.wager_pot", {
+          pot: formatStake(fee * BigInt(players), decimals, symbol),
+          players: String(players),
+        })}
+      </p>`;
+    })();
     const fieldClass =
       "w-full rounded bg-black/30 border border-white/10 px-2 py-1 text-sm text-white " +
       "placeholder:text-white/30 disabled:opacity-50";
@@ -333,42 +370,39 @@ export class HostLobbyModal extends BaseModal {
 
         ${this.wagerEnabled || attached
           ? html`
-              <div class="grid gap-3 mt-3 sm:grid-cols-3">
-                <label class="text-xs text-white/60">
-                  ${translateText("host_modal.wager_mint")}
-                  <input
-                    class=${fieldClass}
-                    type="text"
-                    .value=${this.wager?.mint ?? this.wagerMint}
-                    ?disabled=${attached || this.wagerRequestInFlight}
-                    placeholder=${translateText(
-                      "host_modal.wager_mint_placeholder",
-                    )}
-                    @input=${(e: Event) => {
-                      this.wagerMint = (
-                        e.target as HTMLInputElement
-                      ).value.trim();
-                    }}
-                  />
-                </label>
-                <label class="text-xs text-white/60">
-                  ${translateText("host_modal.wager_entry_fee")}
-                  <input
-                    class=${fieldClass}
-                    type="text"
-                    inputmode="numeric"
-                    .value=${this.wager?.entryFee ?? this.wagerEntryFee}
-                    ?disabled=${attached || this.wagerRequestInFlight}
-                    placeholder=${translateText(
-                      "host_modal.wager_entry_fee_placeholder",
-                    )}
-                    @input=${(e: Event) => {
-                      this.wagerEntryFee = (
-                        e.target as HTMLInputElement
-                      ).value.trim();
-                    }}
-                  />
-                </label>
+              <div class="mt-3">
+                <span
+                  class="text-[10px] font-bold uppercase tracking-widest text-white/40"
+                  >${translateText("host_modal.wager_stake")}</span
+                >
+                <div class="flex flex-wrap gap-2 mt-2" role="group">
+                  ${(attached && attachedTier !== null
+                    ? [attachedTier]
+                    : (this.wagerOptions?.tiers ?? [])
+                  ).map((tier) => {
+                    const selected = attached || this.wagerTier === tier;
+                    return html`<button
+                      type="button"
+                      aria-pressed=${selected}
+                      ?disabled=${attached || this.wagerRequestInFlight}
+                      class=${"px-4 py-2 rounded-xl text-sm font-bold border transition-all " +
+                      "disabled:opacity-50 disabled:cursor-not-allowed " +
+                      (selected
+                        ? "bg-malibu-blue border-malibu-blue text-white"
+                        : "bg-black/30 border-white/10 text-white/80 hover:border-white/30")}
+                      @click=${() => {
+                        this.wagerTier = tier;
+                        this.wagerError = null;
+                      }}
+                    >
+                      ${tier}${symbol === "" ? "" : ` ${symbol}`}
+                    </button>`;
+                  })}
+                </div>
+                ${potPreview}
+              </div>
+
+              <div class="grid gap-3 mt-3 sm:grid-cols-2">
                 <label class="text-xs text-white/60">
                   ${translateText("host_modal.wager_max_players")}
                   <input
@@ -387,6 +421,11 @@ export class HostLobbyModal extends BaseModal {
                     }}
                   />
                 </label>
+                <p class="text-[11px] text-white/40 self-end break-all">
+                  ${translateText("host_modal.wager_token", {
+                    mint: this.wager?.mint ?? this.wagerOptions?.mint ?? "",
+                  })}
+                </p>
               </div>
 
               ${attached
@@ -423,21 +462,15 @@ export class HostLobbyModal extends BaseModal {
     const state = await fetchLobbyWager(this.lobbyId);
     this.wagerAvailable = state.available;
     this.wager = state.wager ?? null;
+    this.wagerOptions = state.options ?? null;
   }
 
   private handleAttachWager = async () => {
     if (this.wagerRequestInFlight || this.wager !== null || !this.lobbyId) {
       return;
     }
-    if (
-      !/^\d+$/.test(this.wagerEntryFee) ||
-      BigInt(this.wagerEntryFee) === 0n
-    ) {
-      this.wagerError = translateText("host_modal.wager_error_entry_fee");
-      return;
-    }
-    if (this.wagerMint === "") {
-      this.wagerError = translateText("host_modal.wager_error_mint");
+    if (this.wagerTier === null) {
+      this.wagerError = translateText("host_modal.wager_error_no_tier");
       return;
     }
 
@@ -445,8 +478,7 @@ export class HostLobbyModal extends BaseModal {
     this.wagerError = null;
     try {
       const result = await setLobbyWager(this.lobbyId, {
-        mint: this.wagerMint,
-        entryFee: this.wagerEntryFee,
+        tier: this.wagerTier,
         maxPlayers: this.wagerMaxPlayers,
       });
       if (result.ok) {

@@ -1,4 +1,3 @@
-import { PublicKey } from "@solana/web3.js"; // [ARENA]
 import compression from "compression";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -35,11 +34,7 @@ import {
   logBypassUse,
   resolveDevBypass,
 } from "./arena/devBypass"; // [ARENA]
-import {
-  arenaMaxEntryFee,
-  createWageredMatch,
-  entryFeeWithinCap,
-} from "./arena/matchCreator";
+import { arenaMaxEntryFee, createWageredMatch } from "./arena/matchCreator";
 import { matchRegistry, toWagerInfo } from "./arena/matchRegistry";
 import {
   runWagerPreflight,
@@ -47,6 +42,7 @@ import {
   wageringOperational,
 } from "./arena/preflight"; // [ARENA]
 import { verifyOnchainMembership } from "./arena/rpcClient";
+import { resolveTierEntryFee, stakeMint } from "./arena/stakeMint"; // [ARENA]
 import { walletRegistry } from "./arena/walletRegistry";
 import { MapPlaylist } from "./MapPlaylist";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
@@ -411,34 +407,32 @@ export async function startWorker() {
       return res.status(401).json({ error: "Invalid token" });
     }
 
-    // No rakeBps here on purpose: the house cut is an operator setting
-    // (ARENA_RAKE_BPS), not something a lobby host gets to choose.
+    // [ARENA] The host chooses a TIER, not an amount, and not a token.
+    //
+    // Neither `entryFee` nor `mint` is accepted from the client any more. The
+    // server derives both — the fee from the tier and the deployment's mint
+    // decimals, the mint from ARENA_STAKE_MINT. That is the point of the
+    // change: an off-tier stake is not rejected, it is unrepresentable, so the
+    // policy cannot drift from its enforcement. Same reasoning as gating a
+    // wagered start on the escrow reporting InProgress rather than on a seat
+    // count.
+    //
+    // No rakeBps here either, for the older reason: the house cut is an
+    // operator setting (ARENA_RAKE_BPS), not something a lobby host gets to
+    // choose.
     const parsed = z
       .object({
-        // A u64 of token base units. String, not number: entry fees above 2^53
-        // would silently round through JSON.
-        entryFee: z
-          .string()
-          .regex(/^\d+$/)
-          .refine((s) => {
-            const n = BigInt(s);
-            return n > 0n && n <= 0xffffffffffffffffn;
-          }, "entryFee must be a non-zero u64"),
-        mint: z.string().refine((s) => {
-          try {
-            new PublicKey(s);
-            return true;
-          } catch {
-            return false;
-          }
-        }, "mint must be a base58 address"),
+        // Whole tokens. Validated against the deployment's *offered* tiers
+        // below, not just against STAKE_TIERS — ARENA_MAX_ENTRY_FEE can
+        // suppress some, and that filtering has to be server-side.
+        tier: z.number().int().positive(),
         maxPlayers: z.number().int().min(2).max(16),
       })
       .safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: z.prettifyError(parsed.error) });
     }
-    const { entryFee, mint, maxPlayers } = parsed.data;
+    const { tier, maxPlayers } = parsed.data;
 
     const game = gm.game(req.params.id);
     if (game === null) {
@@ -468,13 +462,24 @@ export async function startWorker() {
         reason: wagerDisabledReason() ?? undefined,
       });
     }
-    // [ARENA] Operator ceiling on the stake. Checked here rather than in the
-    // program: the escrow is equally sound at any size, so this is policy, and
-    // the accepted-risk posture ("no raised stake limits while the winner is
-    // client-voted") had nothing enforcing it until now.
-    if (!entryFeeWithinCap(BigInt(entryFee))) {
+    // [ARENA] Turn the tier into an entry fee, or say why not. wageringOperational()
+    // above already implies this resolved — preflight refuses `ok` without it —
+    // but read it explicitly rather than asserting, so a future reordering of
+    // the guards cannot turn a null into a crash.
+    const stake = stakeMint();
+    if (stake === null) {
+      return res.status(503).json({ error: "wager_not_configured" });
+    }
+    // Operator ceiling on the stake, now expressed as which tiers are offered.
+    // Enforced here rather than in the program: the escrow is equally sound at
+    // any size, so this is policy — and the accepted-risk posture ("no raised
+    // stake limits while the winner is client-voted") had nothing enforcing it
+    // until the cap landed.
+    const tierFee = resolveTierEntryFee(stake, tier);
+    if (!tierFee.ok) {
       return res.status(409).json({
-        error: "wager_entry_fee_too_high",
+        error: tierFee.error,
+        tiers: stake.tiers,
         maxEntryFee: arenaMaxEntryFee()?.toString(),
       });
     }
@@ -488,9 +493,11 @@ export async function startWorker() {
 
     try {
       const wager = await createWageredMatch(game.id, {
-        mint,
-        entryFee: BigInt(entryFee),
+        mint: stake.mintBase58,
+        entryFee: tierFee.entryFee,
         maxPlayers,
+        decimals: stake.decimals,
+        symbol: stake.symbol,
       });
       log.info("wager escrow created", {
         gameID: game.id,
@@ -520,10 +527,25 @@ export async function startWorker() {
     // `wagerAvailable` tells the host UI whether to offer the control at all —
     // a deployment without ARENA_PROGRAM_ID cannot escrow anything, and a
     // wager button that always fails is worse than no button.
+    //
+    // `wagerOptions` is what the host picks a stake FROM, so it has to be
+    // available before any escrow exists — which is why it is not a field on
+    // `wager`, that being per-match and absent until one does.
     const wager = matchRegistry.get(game.id);
+    const stake = wageringOperational() ? stakeMint() : null;
     res.json({
       ...game.gameInfo(),
       wagerAvailable: wageringOperational(),
+      ...(stake !== null
+        ? {
+            wagerOptions: {
+              tiers: stake.tiers,
+              mint: stake.mintBase58,
+              decimals: stake.decimals,
+              symbol: stake.symbol,
+            },
+          }
+        : {}),
       ...(wager !== undefined ? { wager: toWagerInfo(wager) } : {}),
     });
   });

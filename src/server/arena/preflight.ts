@@ -18,9 +18,11 @@
 // unconfigured server and therefore already safe.
 
 import { PublicKey } from "@solana/web3.js";
+import { decodeTokenAccount } from "../../core/arena/arenaProgram"; // [ARENA]
 import { arenaMaxEntryFee, arenaProgramId, arenaRakeBps } from "./matchCreator";
 import { getConnection } from "./rpcClient";
 import { serverKeypair, serverKeypairPath } from "./serverKeypair";
+import { resolveStakeMint } from "./stakeMint"; // [ARENA]
 
 /**
  * Minimum authority balance, in lamports, before wagering is offered.
@@ -161,6 +163,57 @@ async function check(): Promise<Preflight> {
         state: "broken",
         reason: `authority ${authority.toBase58()} holds ${balance} lamports, below the ${MIN_AUTHORITY_LAMPORTS} needed to pay match rent`,
       };
+    }
+
+    // [ARENA] The staking token. Stakes are denominated in tiers now, and a
+    // tier is meaningless without a known mint and its decimals. Resolved
+    // rather than merely validated: stakeMint() is what the endpoint reads to
+    // turn a tier into an entry fee.
+    const stake = await resolveStakeMint();
+    if (!stake.ok) {
+      return { state: "broken", reason: stake.reason };
+    }
+
+    // [ARENA] example.env has always said TREASURY_TOKEN_ACCOUNT "must be an
+    // SPL token account for the same mint the match is staked in" — and until
+    // now nothing enforced it, the same documented-rule-with-nothing-behind-it
+    // shape as the Phase 1 start gate and the stake cap. A mismatch locks the
+    // pot: settle_match's rake CPI fails, so the whole settlement fails, and
+    // the stakes sit in the vault until the 24h timeout-cancel. Only checkable
+    // now that the server knows the mint at boot.
+    if (rakeBps > 0) {
+      const treasury = new PublicKey(process.env.TREASURY_TOKEN_ACCOUNT!);
+      const treasuryInfo = await getConnection().getAccountInfo(treasury);
+      if (treasuryInfo === null) {
+        return {
+          state: "broken",
+          reason: `no account at TREASURY_TOKEN_ACCOUNT ${treasury.toBase58()} on this cluster`,
+        };
+      }
+      let treasuryToken;
+      try {
+        treasuryToken = decodeTokenAccount(
+          treasuryInfo.data,
+          treasuryInfo.owner,
+        );
+      } catch (e) {
+        return {
+          state: "broken",
+          reason: `TREASURY_TOKEN_ACCOUNT ${treasury.toBase58()} is not an SPL token account: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        };
+      }
+      if (!treasuryToken.mint.equals(stake.stake.mint)) {
+        return {
+          state: "broken",
+          reason:
+            `TREASURY_TOKEN_ACCOUNT ${treasury.toBase58()} holds mint ` +
+            `${treasuryToken.mint.toBase58()}, but stakes are in ` +
+            `${stake.stake.mintBase58} — the rake transfer would fail and take ` +
+            "the whole settlement down with it, stranding the pot",
+        };
+      }
     }
   } catch (e) {
     // Fail closed, like the dev-bypass gate: an RPC we cannot reach at boot is

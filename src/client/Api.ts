@@ -38,6 +38,8 @@ import {
   GameInfo,
   WagerInfo, // [ARENA]
   WagerInfoSchema, // [ARENA]
+  WagerOptions, // [ARENA]
+  WagerOptionsSchema, // [ARENA]
 } from "../core/Schemas";
 import { getAuthHeader, getPlayToken, logOut, userAuth } from "./Auth";
 import { ClientEnv } from "./ClientEnv";
@@ -878,9 +880,12 @@ export async function setLobbyListed(
 // configured); `wager` is present once a stake is attached. Both false/absent
 // on any failure, which hides the control rather than offering one that cannot
 // work.
-export async function fetchLobbyWager(
-  gameID: string,
-): Promise<{ available: boolean; wager?: WagerInfo }> {
+export async function fetchLobbyWager(gameID: string): Promise<{
+  available: boolean;
+  wager?: WagerInfo;
+  /** What the host may stake. Present before any escrow exists. */
+  options?: WagerOptions;
+}> {
   try {
     const res = await fetch(
       `${ClientEnv.serverHttpBase()}/${ClientEnv.workerPath(gameID)}/api/game/${gameID}`,
@@ -889,9 +894,11 @@ export async function fetchLobbyWager(
     if (!res.ok) return { available: false };
     const json = await res.json();
     const parsed = WagerInfoSchema.safeParse(json?.wager);
+    const options = WagerOptionsSchema.safeParse(json?.wagerOptions);
     return {
       available: json?.wagerAvailable === true,
       ...(parsed.success ? { wager: parsed.data } : {}),
+      ...(options.success ? { options: options.data } : {}),
     };
   } catch (e) {
     console.warn("fetchLobbyWager: request failed", e);
@@ -908,8 +915,10 @@ export async function fetchLobbyWager(
 // "wager_not_configured", "wager_already_set", "wager_private_lobbies_only").
 export async function setLobbyWager(
   gameID: string,
-  // No rakeBps: the house cut is a server-side operator setting.
-  wager: { mint: string; entryFee: string; maxPlayers: number },
+  // A tier in whole tokens, not an amount, and no mint: the server derives both
+  // from ARENA_STAKE_MINT and the tier, so an off-tier stake cannot be
+  // expressed. No rakeBps either — the house cut is an operator setting.
+  wager: { tier: number; maxPlayers: number },
 ): Promise<{ ok: true; wager: WagerInfo } | { ok: false; error?: string }> {
   try {
     const token = await getPlayToken();

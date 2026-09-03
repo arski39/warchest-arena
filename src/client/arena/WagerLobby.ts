@@ -1,6 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { WagerInfo } from "../../core/Schemas";
+import { formatStake } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
 import { connectWallet, getConnectedWallet } from "./WalletProvider";
@@ -111,9 +112,14 @@ export class WagerLobby extends LitElement {
 
   render() {
     if (!this.wager) return html``;
-    const { entryFee, maxPlayers, rakeBps } = this.wager;
+    const { entryFee, maxPlayers, rakeBps, decimals, symbol } = this.wager;
     const pot = BigInt(entryFee) * BigInt(maxPlayers);
     const payout = pot - (pot * BigInt(rakeBps)) / 10000n;
+    // [ARENA] Render whole tokens, not base units. A prompt that says
+    // "5000000" when the host chose the 5 tier is how someone stakes the wrong
+    // amount believing they checked. formatStake never routes through Number.
+    const fee = formatStake(entryFee, decimals, symbol);
+    const takes = formatStake(payout, decimals, symbol);
 
     return html`
       <div class="wager-panel">
@@ -122,7 +128,7 @@ export class WagerLobby extends LitElement {
 
         <div class="wager-row">
           <span>${translateText("wager_lobby.entry_fee")}</span>
-          <span>${entryFee}</span>
+          <span>${fee}</span>
         </div>
         <div class="wager-row">
           <span>${translateText("wager_lobby.max_players")}</span>
@@ -130,7 +136,7 @@ export class WagerLobby extends LitElement {
         </div>
         <div class="wager-row">
           <span>${translateText("wager_lobby.winner_takes")}</span>
-          <span>${payout.toString()}</span>
+          <span>${takes}</span>
         </div>
         <div class="wager-row muted">
           <span>${translateText("wager_lobby.mint")}</span>
