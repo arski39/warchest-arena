@@ -11,7 +11,7 @@
 
 import { GameEnv } from "../../core/configuration/Config";
 import { ServerEnv } from "../ServerEnv";
-import { connection } from "./rpcClient";
+import { getConnection } from "./rpcClient";
 
 /**
  * Genesis hashes of the public clusters. Only mainnet is disqualifying; the
@@ -73,7 +73,7 @@ export async function resolveDevBypass(): Promise<boolean> {
 
   let genesis: string;
   try {
-    genesis = await connection.getGenesisHash();
+    genesis = await getConnection().getGenesisHash();
   } catch (e) {
     // Fail closed. An unreachable RPC means we cannot rule out mainnet, and
     // "the bypass quietly stayed off in dev" is a far better outcome than

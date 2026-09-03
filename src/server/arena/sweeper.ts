@@ -26,7 +26,7 @@ import {
 import { MAX_GAME_DURATION_MS } from "../../core/Schemas";
 import { arenaProgramId } from "./matchCreator";
 import { wageringOperational } from "./preflight";
-import { connection } from "./rpcClient";
+import { getConnection } from "./rpcClient";
 import { serverKeypair } from "./serverKeypair";
 import { cancelAndRefund, closeMatchAccount } from "./settler";
 
@@ -247,7 +247,7 @@ async function matchesWithStatus(
       },
     },
   ];
-  return await connection.getProgramAccounts(programId, {
+  return await getConnection().getProgramAccounts(programId, {
     commitment: "confirmed",
     filters,
   });

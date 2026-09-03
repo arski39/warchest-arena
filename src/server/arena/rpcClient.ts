@@ -6,10 +6,35 @@ import {
 } from "../../core/arena/arenaProgram";
 import type { WagerConfig } from "./matchRegistry";
 
-const connection = new Connection(
-  process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
-  "confirmed",
-);
+// [ARENA] The endpoint is read on FIRST USE, not at import time, and that is
+// load-bearing rather than stylistic.
+//
+// Server.ts calls dotenv.config() after its own imports. ESM evaluates the
+// entire module graph before any statement in the entry file runs, so a
+// module-level `new Connection(process.env.SOLANA_RPC_URL ?? ...)` here saw an
+// unset variable in the MASTER process and silently fell back to devnet.
+// Workers escaped it only because cluster.fork() hands them a process.env that
+// dotenv has already populated.
+//
+// The symptom was quiet and misleading: the master's boot preflight reported
+// the program "not deployed on this cluster" while both workers verified the
+// same program 1.5s later. Preflight fails closed, so the master simply never
+// started the H2 sweeper -- the one piece of recovery that is meant to survive
+// a crash. It only bites env-file setups; a container passing real env vars
+// has them before node starts.
+//
+// Deliberately NOT fixed by moving dotenv above the other imports in
+// Server.ts: prettier reorders imports in this repo, so an ordering-dependent
+// fix would be one `npm run format` away from silently coming back.
+let cached: Connection | null = null;
+
+export function getConnection(): Connection {
+  cached ??= new Connection(
+    process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
+    "confirmed",
+  );
+  return cached;
+}
 
 /**
  * [ARENA] Reads and decodes the escrow's MatchAccount. Returns null when the
@@ -19,7 +44,7 @@ const connection = new Connection(
 export async function fetchMatchAccount(
   wager: WagerConfig,
 ): Promise<MatchAccountView | null> {
-  const info = await connection.getAccountInfo(
+  const info = await getConnection().getAccountInfo(
     new PublicKey(wager.matchPDA),
     "confirmed",
   );
@@ -131,5 +156,3 @@ export async function verifyOnchainMembership(
   }
   return { isMember: false, match: lastSeen };
 }
-
-export { connection };

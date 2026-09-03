@@ -10,7 +10,7 @@ import {
   MAX_RAKE_BPS,
 } from "../../core/arena/arenaProgram";
 import { matchRegistry, type WagerConfig } from "./matchRegistry";
-import { connection } from "./rpcClient";
+import { getConnection } from "./rpcClient";
 import { serverKeypair, serverKeypairPath } from "./serverKeypair";
 
 /** Thrown when the host asks for a wagered lobby the server cannot escrow. */
@@ -153,7 +153,7 @@ export async function createWageredMatch(
   // The authority pays rent for the MatchAccount and the vault ATA. It never
   // custodies stake — that sits in the vault, which only the program can move.
   const txSig = await sendAndConfirmTransaction(
-    connection,
+    getConnection(),
     new Transaction().add(ix),
     [authority],
     { commitment: "confirmed" },

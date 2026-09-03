@@ -19,16 +19,20 @@
 
 import { PublicKey } from "@solana/web3.js";
 import { arenaMaxEntryFee, arenaProgramId, arenaRakeBps } from "./matchCreator";
-import { connection } from "./rpcClient";
+import { getConnection } from "./rpcClient";
 import { serverKeypair, serverKeypairPath } from "./serverKeypair";
 
 /**
  * Minimum authority balance, in lamports, before wagering is offered.
  *
- * A match costs roughly 0.0084 SOL that is **never reclaimed** — MatchAccount
- * has no close instruction — plus fees and any ATA the settler has to create.
- * 0.05 SOL is about six matches: enough that a server which passes this is not
- * about to fail on its first lobby, low enough not to be a nuisance on devnet.
+ * A match locks roughly 0.0084 SOL of rent — a MatchAccount plus the vault ATA
+ * — while it is live, plus fees and any ATA the settler has to create.
+ * `close_match` returns both once the match is terminal and the vault is empty,
+ * and the sweeper calls it, so this is a float rather than a permanent cost.
+ * It is still a floor worth holding: the rent comes back later, not before the
+ * next lobby needs it. 0.05 SOL is about six concurrent matches — enough that a
+ * server which passes this is not about to fail on its first lobby, low enough
+ * not to be a nuisance on devnet.
  *
  * This is a smoke test, not a guarantee. The balance is read once, and nothing
  * re-checks it as it drains; an operational alarm is the real answer.
@@ -136,8 +140,8 @@ async function check(): Promise<Preflight> {
 
   try {
     const [programInfo, balance] = await Promise.all([
-      connection.getAccountInfo(programId),
-      connection.getBalance(authority),
+      getConnection().getAccountInfo(programId),
+      getConnection().getBalance(authority),
     ]);
 
     if (programInfo === null) {

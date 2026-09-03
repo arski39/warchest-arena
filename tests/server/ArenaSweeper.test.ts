@@ -31,7 +31,7 @@ const MINT = new PublicKey("11111111111111111111111111111113");
 
 const getProgramAccounts = vi.hoisted(() => vi.fn());
 vi.mock("../../src/server/arena/rpcClient", () => ({
-  connection: { getProgramAccounts },
+  getConnection: () => ({ getProgramAccounts }),
 }));
 
 const serverKeypair = vi.hoisted(() => vi.fn());

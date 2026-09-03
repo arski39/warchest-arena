@@ -21,7 +21,7 @@ const LOCAL = "9tnQqPjEhJPRXBpm3fPMKZpNMDVHqMPKPHDPFVvxjEZm";
 
 const getGenesisHash = vi.hoisted(() => vi.fn<() => Promise<string>>());
 vi.mock("../../src/server/arena/rpcClient", () => ({
-  connection: { getGenesisHash },
+  getConnection: () => ({ getGenesisHash }),
 }));
 
 /** Fresh module state per case — the resolved flag is module-level by design. */

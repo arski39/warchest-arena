@@ -19,7 +19,7 @@ import {
 import type { ClientSendWinnerMessage } from "../../core/Schemas";
 import type { Client } from "../Client";
 import { matchRegistry, type WagerConfig } from "./matchRegistry";
-import { connection, fetchMatchAccount } from "./rpcClient";
+import { fetchMatchAccount, getConnection } from "./rpcClient";
 import { serverKeypair } from "./serverKeypair";
 import { walletRegistry } from "./walletRegistry";
 
@@ -245,9 +245,14 @@ async function payOut(
       }),
     );
 
-  const txSig = await sendAndConfirmTransaction(connection, tx, [authority], {
-    commitment: "confirmed",
-  });
+  const txSig = await sendAndConfirmTransaction(
+    getConnection(),
+    tx,
+    [authority],
+    {
+      commitment: "confirmed",
+    },
+  );
   console.log(
     `[arena/settler] settled game=${gameId} winner=${winner.toBase58()} tx=${txSig}`,
   );
@@ -281,7 +286,7 @@ export async function cancelAndRefund(
   }
 
   return await sendAndConfirmTransaction(
-    connection,
+    getConnection(),
     new Transaction().add(
       buildCancelMatchIx({
         programId,
@@ -319,7 +324,7 @@ export async function closeMatchAccount(
 ): Promise<string> {
   const authority = serverKeypair();
   return await sendAndConfirmTransaction(
-    connection,
+    getConnection(),
     new Transaction().add(
       buildCloseMatchIx({
         programId,
@@ -359,10 +364,10 @@ async function ensureTokenAccount(
   owner: PublicKey,
   mint: PublicKey,
 ): Promise<void> {
-  if ((await connection.getAccountInfo(ata, "confirmed")) !== null) return;
+  if ((await getConnection().getAccountInfo(ata, "confirmed")) !== null) return;
   const authority = serverKeypair();
   await sendAndConfirmTransaction(
-    connection,
+    getConnection(),
     new Transaction().add(
       buildCreateAtaIdempotentIx(authority.publicKey, owner, mint),
     ),
