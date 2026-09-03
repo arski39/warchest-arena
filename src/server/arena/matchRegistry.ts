@@ -1,4 +1,5 @@
 import { MatchStatus } from "../../core/arena/arenaProgram";
+import type { PublicWagerSummary } from "../../core/Schemas";
 
 export interface WagerConfig {
   matchPDA: string; // base58 Solana account address
@@ -68,6 +69,26 @@ export function toWagerInfo(config: WagerConfig): WagerInfo {
     programId: config.programId,
     rpcUrl: publicRpcUrl(),
     decimals: config.decimals,
+    symbol: config.symbol,
+  };
+}
+
+/**
+ * [ARENA] The lobby-browser form of a wager: what a seat costs and what the
+ * winner keeps, and nothing a card does not draw.
+ *
+ * Separate from toWagerInfo() on purpose. This one is broadcast to every
+ * browser watching the lobby list, several times a minute, for lobbies nobody
+ * has clicked — so it omits the addresses and the RPC endpoint that only a
+ * player actually joining needs. Adding a field here adds it to every
+ * broadcast.
+ */
+export function toPublicWagerSummary(config: WagerConfig): PublicWagerSummary {
+  return {
+    entryFee: config.entryFee.toString(),
+    maxPlayers: config.maxPlayers,
+    decimals: config.decimals,
+    rakeBps: config.rakeBps,
     symbol: config.symbol,
   };
 }

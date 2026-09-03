@@ -117,3 +117,25 @@ export function formatStake(
   if (negative) text = `-${text}`;
   return symbol ? `${text} ${symbol}` : text;
 }
+
+/**
+ * What the winner actually takes: the full pot, less the house rake.
+ *
+ * The one implementation, because it is rendered in two places that must
+ * agree — the stake prompt a player confirms, and the lobby card that drew
+ * them to it. A card promising more than the prompt charges for is the kind of
+ * discrepancy nobody reports as a bug; they just stop trusting the number.
+ *
+ * BigInt throughout for the same reason as `formatStake`: a u64 pot is not a
+ * `Number`. Integer division truncates, matching the program's own
+ * `checked_mul`/`checked_div` rake maths, so this never over-promises.
+ */
+export function winnerPayout(
+  entryFee: bigint | string,
+  maxPlayers: number,
+  rakeBps: number,
+): bigint {
+  const fee = typeof entryFee === "bigint" ? entryFee : BigInt(entryFee);
+  const pot = fee * BigInt(maxPlayers);
+  return pot - (pot * BigInt(rakeBps)) / 10000n;
+}

@@ -20,6 +20,7 @@ import {
   LobbyInfoEvent,
   PublicGameInfo,
 } from "../core/Schemas";
+import { formatStake, winnerPayout } from "../core/arena/stakeTiers"; // [ARENA]
 import {
   Difficulty,
   GameMapSize,
@@ -62,6 +63,10 @@ export class JoinLobbyModal extends BaseModal {
   // the pre-join form.
   @state() private hostedLobbies: PublicGameInfo[] = [];
   @state() private hostedLobbiesLoaded = false;
+  // [ARENA] Selected stake filter, as an entryFee in base units, or null for
+  // "all". A string rather than a number because entryFee is a u64 — see
+  // WagerInfoSchema — and it is only ever compared, never arithmetic.
+  @state() private stakeFilter: string | null = null;
 
   private leaveLobbyOnClose = true;
   private countdownTimerId: number | null = null;
@@ -322,7 +327,67 @@ export class JoinLobbyModal extends BaseModal {
     `;
   }
 
+  // [ARENA] The distinct stakes currently on offer, cheapest first.
+  //
+  // Derived from the lobbies themselves rather than from STAKE_TIERS: a chip
+  // for a tier with nothing behind it is a dead end, and the offered set is a
+  // server-side decision (ARENA_MAX_ENTRY_FEE filters it) that this list would
+  // otherwise have to guess at.
+  private stakesOnOffer(): { entryFee: string; label: string }[] {
+    const seen = new Map<string, string>();
+    for (const lobby of this.hostedLobbies) {
+      const w = lobby.wager;
+      if (w === undefined || seen.has(w.entryFee)) continue;
+      seen.set(w.entryFee, formatStake(w.entryFee, w.decimals, w.symbol));
+    }
+    return [...seen.entries()]
+      .map(([entryFee, label]) => ({ entryFee, label }))
+      .sort((a, b) => (BigInt(a.entryFee) < BigInt(b.entryFee) ? -1 : 1));
+  }
+
+  // [ARENA] Stake filter, shown only once there is something to filter. A lone
+  // chip beside "all" would be a control with no purpose.
+  private renderStakeFilter() {
+    const stakes = this.stakesOnOffer();
+    if (stakes.length < 2) return "";
+    const chip = (active: boolean) =>
+      `px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+        active
+          ? "bg-emerald-400/20 border-emerald-400/50 text-emerald-200"
+          : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+      }`;
+    return html`
+      <div class="flex flex-wrap gap-1.5 mb-2">
+        <button
+          type="button"
+          class=${chip(this.stakeFilter === null)}
+          @click=${() => (this.stakeFilter = null)}
+        >
+          ${translateText("private_lobby.stake_any")}
+        </button>
+        ${stakes.map(
+          (s) =>
+            html`<button
+              type="button"
+              class=${chip(this.stakeFilter === s.entryFee)}
+              @click=${() => (this.stakeFilter = s.entryFee)}
+            >
+              ${s.label}
+            </button>`,
+        )}
+      </div>
+    `;
+  }
+
   private renderHostedLobbies() {
+    // [ARENA] A filter that matches nothing shows the empty state below rather
+    // than an empty list, which is why it is applied before the length check.
+    const lobbies =
+      this.stakeFilter === null
+        ? this.hostedLobbies
+        : this.hostedLobbies.filter(
+            (l) => l.wager?.entryFee === this.stakeFilter,
+          );
     let content: TemplateResult;
     if (!this.hostedLobbiesLoaded) {
       content = html`<div class="flex justify-center py-3">
@@ -330,13 +395,13 @@ export class JoinLobbyModal extends BaseModal {
           class="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin"
         ></div>
       </div>`;
-    } else if (this.hostedLobbies.length === 0) {
+    } else if (lobbies.length === 0) {
       content = html`<p class="text-sm text-white/50">
         ${translateText("private_lobby.no_open_lobbies")}
       </p>`;
     } else {
       content = html`<div class="flex flex-col gap-2">
-        ${this.hostedLobbies.map((lobby) => this.renderHostedLobbyRow(lobby))}
+        ${lobbies.map((lobby) => this.renderHostedLobbyRow(lobby))}
       </div>`;
     }
     return html`
@@ -346,7 +411,7 @@ export class JoinLobbyModal extends BaseModal {
         >
           ${translateText("private_lobby.open_lobbies")}
         </div>
-        ${content}
+        ${this.hostedLobbiesLoaded ? this.renderStakeFilter() : ""} ${content}
       </div>
     `;
   }
@@ -424,6 +489,7 @@ export class JoinLobbyModal extends BaseModal {
               </div>`
             : ""}
         </div>
+        ${this.renderRowWager(lobby)}
         <div
           class="flex items-center gap-1 text-white/80 text-xs font-bold shrink-0"
         >
@@ -435,6 +501,35 @@ export class JoinLobbyModal extends BaseModal {
           </svg>
         </div>
       </button>
+    `;
+  }
+
+  // [ARENA] The stake, pot-first: what the winner takes leads, and the cost of
+  // a seat sits under it. Same ordering and the same arithmetic as the stake
+  // prompt this row leads to (winnerPayout), because a card that promises more
+  // than the prompt charges for is how a player stops trusting the number.
+  //
+  // Absent for a free lobby, which is every lobby unless the server has proved
+  // it can verify a wagered match — see server/arena/publicLobbies.ts.
+  private renderRowWager(lobby: PublicGameInfo) {
+    const w = lobby.wager;
+    if (w === undefined) return "";
+    const takes = formatStake(
+      winnerPayout(w.entryFee, w.maxPlayers, w.rakeBps),
+      w.decimals,
+      w.symbol,
+    );
+    const seat = formatStake(w.entryFee, w.decimals, w.symbol);
+    return html`
+      <div class="flex flex-col items-end shrink-0 leading-tight">
+        <span class="text-sm font-bold text-emerald-300">${takes}</span>
+        <!-- The amount is rendered as data, not interpolated into the
+             translated string: a missing or malformed translation must not be
+             able to hide what a seat costs. -->
+        <span class="text-[10px] text-white/50"
+          >${seat} ${translateText("private_lobby.stake_per_seat")}</span
+        >
+      </div>
     `;
   }
 

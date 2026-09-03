@@ -885,6 +885,12 @@ export async function fetchLobbyWager(gameID: string): Promise<{
   wager?: WagerInfo;
   /** What the host may stake. Present before any escrow exists. */
   options?: WagerOptions;
+  /**
+   * Whether this server lets a wagered lobby be listed publicly. The server's
+   * *resolved* answer — it only says true once a replay verification actually
+   * succeeded there — so the UI must take it rather than infer one.
+   */
+  publicLobbies?: boolean;
 }> {
   try {
     const res = await fetch(
@@ -897,6 +903,7 @@ export async function fetchLobbyWager(gameID: string): Promise<{
     const options = WagerOptionsSchema.safeParse(json?.wagerOptions);
     return {
       available: json?.wagerAvailable === true,
+      publicLobbies: json?.wagerPublicLobbies === true,
       ...(parsed.success ? { wager: parsed.data } : {}),
       ...(options.success ? { options: options.data } : {}),
     };

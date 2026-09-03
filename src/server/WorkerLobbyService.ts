@@ -6,6 +6,7 @@ import {
   PublicGames,
   PublicLobbyMessage,
 } from "../core/Schemas";
+import { matchRegistry, toPublicWagerSummary } from "./arena/matchRegistry"; // [ARENA]
 import { GameManager } from "./GameManager";
 import {
   InternalGameInfo,
@@ -28,6 +29,12 @@ function publicLobbyGameConfig(gc: GameConfig): GameConfig {
   delete sanitized.nameRevealPublicIds;
   delete sanitized.hostCheats;
   return sanitized;
+}
+
+// [ARENA] The wager on a listed lobby, or undefined for a free one.
+function wagerSummary(gameID: string) {
+  const config = matchRegistry.get(gameID);
+  return config === undefined ? undefined : toPublicWagerSummary(config);
 }
 
 export class WorkerLobbyService {
@@ -165,6 +172,12 @@ export class WorkerLobbyService {
         label: g.lobbyLabel(),
         accent: g.lobbyAccent(),
         featured: g.isFeatured() ? true : undefined,
+        // [ARENA] What a seat costs, so the browser can show the stake before
+        // anyone commits to it. A lobby only reaches this list while listed,
+        // and a wagered lobby can only be listed where the server can decide
+        // the winner itself — the gate is in Worker.ts's /listing handler, not
+        // here, so this stays a plain projection of registry state.
+        wager: wagerSummary(gi.gameID),
       } satisfies InternalGameInfo;
     });
     this.sendToMaster({

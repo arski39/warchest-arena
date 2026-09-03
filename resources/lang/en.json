@@ -1398,6 +1398,8 @@
     "pvp_immunity": "PVP immunity duration",
     "spectate": "Spectate",
     "spectating": "Spectating! Loading the game...",
+    "stake_any": "Any stake",
+    "stake_per_seat": "per seat",
     "starting_gold": "Starting Gold",
     "title": "Join Lobby",
     "version_mismatch": "This game was created with a different version. Cannot join."

@@ -282,6 +282,30 @@ export const WagerInfoSchema = z.object({
 });
 export type WagerInfo = z.infer<typeof WagerInfoSchema>;
 
+// [ARENA] The wager as it appears in the PUBLIC lobby browser — deliberately a
+// summary rather than the WagerInfo above.
+//
+// This rides in every lobby-list broadcast to every connected browser, so it
+// carries only what a card needs to show: what a seat costs, how big the pot
+// gets, and what the winner keeps. matchPDA, vault, programId and rpcUrl are
+// omitted because nothing renders them; a player who actually clicks a lobby
+// fetches the full WagerInfo from GET /api/game/:id on the way in.
+//
+// Present only on listed wagered lobbies, which exist only where the server can
+// determine a winner by replaying the match — see server/arena/publicLobbies.ts.
+export const PublicWagerSummarySchema = z.object({
+  /** u64 base units as a decimal string; see WagerInfoSchema. */
+  entryFee: z.string().regex(/^\d+$/),
+  maxPlayers: z.number().int().min(2).max(16),
+  decimals: z.number().int().min(0).max(9),
+  rakeBps: z.number().int().min(0).max(1000),
+  symbol: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,12}$/)
+    .or(z.literal("")),
+});
+export type PublicWagerSummary = z.infer<typeof PublicWagerSummarySchema>;
+
 // [ARENA] What a host may stake, offered before any escrow exists — so this
 // cannot live on WagerInfo, which is per-match and absent until one does.
 // Present on GET /api/game/:id only while preflight reports ok.
@@ -334,6 +358,10 @@ export const PublicGameInfoSchema = z.object({
   label: LobbyLabelSchema.optional(),
   accent: LobbyAccentSchema.optional(),
   featured: z.boolean().optional(),
+  // [ARENA] Set only on listed wagered lobbies. Optional so a client on an
+  // older build simply renders the row as a free lobby, which is what it would
+  // have done anyway.
+  wager: PublicWagerSummarySchema.optional(),
 });
 
 export const PublicGamesSchema = z.object({

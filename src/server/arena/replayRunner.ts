@@ -49,21 +49,31 @@ function workerExecArgv(): string[] {
     : [...process.execArgv, "--import", "tsx"];
 }
 
-export function runReplayVerification(
-  input: ReplayInput,
-  timeoutMs: number = REPLAY_TIMEOUT_MS,
-): Promise<ReplayVerdict> {
-  return new Promise<ReplayVerdict>((resolve) => {
+/**
+ * Spawns one worker, resolves with whatever it posts, and never rejects.
+ *
+ * Shared by verification and by the boot probe so there is exactly one place
+ * that knows how to get a `.ts` worker running with a deadline. `failed` turns
+ * a reason into the caller's own result shape, which is what lets the two
+ * callers keep different verdict types without duplicating the plumbing.
+ */
+function runWorker<T>(
+  entry: URL,
+  input: unknown,
+  timeoutMs: number,
+  failed: (reason: string) => T,
+): Promise<T> {
+  return new Promise<T>((resolve) => {
     let settled = false;
-    const finish = (verdict: ReplayVerdict) => {
+    const finish = (value: T) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       void worker.terminate();
-      resolve(verdict);
+      resolve(value);
     };
 
-    const worker = new Worker(new URL("./replayWorker.ts", import.meta.url), {
+    const worker = new Worker(entry, {
       workerData: input,
       // See workerExecArgv: without a TypeScript loader the thread cannot
       // import this module's own .ts siblings.
@@ -71,23 +81,58 @@ export function runReplayVerification(
     });
 
     const timer = setTimeout(() => {
-      finish({
-        ok: false,
-        reason: `replay did not finish within ${Math.round(timeoutMs / 1000)}s`,
-      });
+      finish(
+        failed(`replay did not finish within ${Math.round(timeoutMs / 1000)}s`),
+      );
     }, timeoutMs);
 
-    worker.on("message", (verdict: ReplayVerdict) => finish(verdict));
+    worker.on("message", (msg: T) => finish(msg));
     worker.on("error", (e: Error) =>
-      finish({ ok: false, reason: `replay worker error: ${e.message}` }),
+      finish(failed(`replay worker error: ${e.message}`)),
     );
     worker.on("exit", (code) => {
       // Only meaningful if it beat the message; a clean exit after posting a
-      // verdict is the normal path and `settled` swallows it.
-      finish({
-        ok: false,
-        reason: `replay worker exited early with code ${code}`,
-      });
+      // result is the normal path and `settled` swallows it.
+      finish(failed(`replay worker exited early with code ${code}`));
     });
   });
+}
+
+export function runReplayVerification(
+  input: ReplayInput,
+  timeoutMs: number = REPLAY_TIMEOUT_MS,
+): Promise<ReplayVerdict> {
+  return runWorker<ReplayVerdict>(
+    new URL("./replayWorker.ts", import.meta.url),
+    input,
+    timeoutMs,
+    (reason) => ({ ok: false, reason }),
+  );
+}
+
+/** What `observeReplay` saw, with hashes as pairs so the clone is explicit. */
+export type ObservedReplay =
+  | { ok: true; hashes: [number, number][] }
+  | { ok: false; reason: string };
+
+/**
+ * Runs the turn log and reports the hashes this build computes, judging
+ * nothing.
+ *
+ * NOT part of settlement — `runReplayVerification` is. It exists so the boot
+ * probe (publicLobbies.ts) can manufacture a recording to then verify against,
+ * standing in for the live game whose clients agreed those hashes. It has to be
+ * its own thread for the same reason the second half does: one simulation per
+ * process, because the terrain map is memoized and the simulation mutates it.
+ */
+export function observeReplay(
+  input: ReplayInput,
+  timeoutMs: number = REPLAY_TIMEOUT_MS,
+): Promise<ObservedReplay> {
+  return runWorker<ObservedReplay>(
+    new URL("./replayProbeWorker.ts", import.meta.url),
+    input,
+    timeoutMs,
+    (reason) => ({ ok: false, reason }),
+  );
 }

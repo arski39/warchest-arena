@@ -859,8 +859,11 @@ class Client {
         onchainTxSig?: string;
       }
   > {
-    // Wagered lobbies are private-only (enforced server-side), and replays and
-    // singleplayer never touch a server lobby at all.
+    // Only a real server lobby can be wagered — replays and singleplayer never
+    // touch one. `source: "private"` covers both a pasted lobby id and a row
+    // clicked in the public browser (JoinLobbyModal dispatches the same event
+    // for each), which is what makes a publicly listed wagered lobby route
+    // through this gate rather than connecting unstaked and being kicked.
     const isPrivate = lobby.source === "private" || lobby.source === "host";
     if (
       !isPrivate ||

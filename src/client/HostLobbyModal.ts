@@ -129,6 +129,12 @@ export class HostLobbyModal extends BaseModal {
   // the stake is baked into the match PDA and changing it would strand anyone
   // who already staked.
   @state() private wagerAvailable: boolean = false;
+  // [ARENA] Whether this server lets a wagered lobby be listed publicly. The
+  // server's resolved answer, not a guess: it reads true only where a replay
+  // verification actually succeeded, which is what makes a public staked lobby
+  // defensible at all. False keeps the old private-only behaviour, so a
+  // deployment that never opted in is unchanged.
+  @state() private wagerPublicLobbies: boolean = false;
   @state() private wager: WagerInfo | null = null;
   @state() private wagerOptions: WagerOptions | null = null;
   @state() private wagerEnabled: boolean = false;
@@ -303,11 +309,16 @@ export class HostLobbyModal extends BaseModal {
   }
 
   // [ARENA] Optional on-chain stake for this lobby. Hidden entirely unless the
-  // server reports it can escrow, and unavailable on a listed lobby — wagered
-  // games are private-only in v1 (the server enforces both; this just keeps the
-  // UI from offering something that would be rejected).
+  // server reports it can escrow.
+  //
+  // A listed lobby may be wagered only where the server also reports it can
+  // decide the winner by replaying the match — the mirror of the check in
+  // Worker.ts's /wager handler, so the UI never offers something that would be
+  // rejected, and never hides something that would be accepted. The server
+  // remains the only thing that decides; this is presentation.
   private renderWagerPanel() {
-    if (!this.wagerAvailable || this.publiclyListed) return nothing;
+    if (!this.wagerAvailable) return nothing;
+    if (this.publiclyListed && !this.wagerPublicLobbies) return nothing;
 
     const attached = this.wager !== null;
     // [ARENA] Decimals and symbol come from the escrow once one exists, and
@@ -461,6 +472,7 @@ export class HostLobbyModal extends BaseModal {
     if (!this.lobbyId) return;
     const state = await fetchLobbyWager(this.lobbyId);
     this.wagerAvailable = state.available;
+    this.wagerPublicLobbies = state.publicLobbies === true;
     this.wager = state.wager ?? null;
     this.wagerOptions = state.options ?? null;
   }

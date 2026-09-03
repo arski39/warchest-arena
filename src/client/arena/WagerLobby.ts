@@ -1,7 +1,7 @@
 import { LitElement, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { WagerInfo } from "../../core/Schemas";
-import { formatStake } from "../../core/arena/stakeTiers";
+import { formatStake, winnerPayout } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
 import "../components/baseComponents/Button";
@@ -132,8 +132,7 @@ export class WagerLobby extends LitElement {
   render() {
     if (!this.wager) return html``;
     const { entryFee, maxPlayers, rakeBps, decimals, symbol } = this.wager;
-    const pot = BigInt(entryFee) * BigInt(maxPlayers);
-    const payout = pot - (pot * BigInt(rakeBps)) / 10000n;
+    const payout = winnerPayout(entryFee, maxPlayers, rakeBps);
     // [ARENA] Render whole tokens, not base units. A prompt that says
     // "5000000" when the host chose the 5 tier is how someone stakes the wrong
     // amount believing they checked. formatStake never routes through Number.

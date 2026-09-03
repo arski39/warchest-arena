@@ -15,6 +15,7 @@ import {
   MAX_HOSTED_LOBBIES,
 } from "../../src/core/Schemas";
 import { LOBBY_LABEL_MAX, sanitizeLobbyLabel } from "../../src/core/Util";
+import { matchRegistry } from "../../src/server/arena/matchRegistry"; // [ARENA]
 import { Client } from "../../src/server/Client";
 import { GameManager } from "../../src/server/GameManager";
 import {
@@ -717,6 +718,9 @@ describe("WorkerLobbyService hosted lobbies", () => {
     // Never touch the real process IPC channel: vitest forks use it.
     sendToMaster = vi.fn();
     (service as any).sendToMaster = sendToMaster;
+    // [ARENA] Module-level map; a leaked registration would make a later
+    // lobby report a stake it never had.
+    matchRegistry.unregister("wagered-g1");
   });
 
   function emitBroadcast(
@@ -768,6 +772,64 @@ describe("WorkerLobbyService hosted lobbies", () => {
     expect(reported.gameConfig.nameReveals).toBeUndefined();
     expect(reported.gameConfig.nameRevealPublicIds).toBeUndefined();
     expect(reported.gameConfig.hostCheats).toBeUndefined();
+  });
+
+  // [ARENA] A wagered lobby can only be listed where the server has proved it
+  // can decide the winner by replaying the match (see arena/publicLobbies.ts).
+  // Once it is, the browser has to be able to show the stake — a player
+  // clicking into a staked lobby blind is exactly what the tier browser exists
+  // to stop.
+  it("carries a listed lobby's stake into the broadcast, and only the fields a card draws", () => {
+    const game = makeGame("wagered-g1", CREATOR);
+    game.setListed(true);
+    gm.listedLobbies.mockReturnValue([game]);
+    matchRegistry.register("wagered-g1", {
+      matchPDA: "MatchPDAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      vault: "Vaultxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      mint: "Mintxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      entryFee: 5_000_000n,
+      maxPlayers: 4,
+      rakeBps: 0,
+      nonce: 7n,
+      programId: "Programxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      decimals: 6,
+      symbol: "ARENA",
+    });
+
+    emitBroadcast({ ffa: [], team: [], special: [], hosted: [] });
+
+    const lobbyList = sendToMaster.mock.calls
+      .map((c: any[]) => c[0])
+      .find((m: any) => m.type === "lobbyList");
+    const reported = lobbyList.lobbies[0];
+    // u64 as a decimal string, never a number: 5 tokens at 6 decimals is
+    // already past nothing, but the type is what stops the first pot that is.
+    expect(reported.wager).toEqual({
+      entryFee: "5000000",
+      maxPlayers: 4,
+      decimals: 6,
+      rakeBps: 0,
+      symbol: "ARENA",
+    });
+    // Deliberately absent. This payload reaches every browser watching the
+    // lobby list, repeatedly, for lobbies nobody has clicked; a player who
+    // actually joins fetches the full WagerInfo from GET /api/game/:id.
+    expect(reported.wager.matchPDA).toBeUndefined();
+    expect(reported.wager.vault).toBeUndefined();
+    expect(reported.wager.programId).toBeUndefined();
+  });
+
+  it("leaves a free lobby's wager field absent", () => {
+    const game = makeGame("free-g1", CREATOR);
+    game.setListed(true);
+    gm.listedLobbies.mockReturnValue([game]);
+
+    emitBroadcast({ ffa: [], team: [], special: [], hosted: [] });
+
+    const lobbyList = sendToMaster.mock.calls
+      .map((c: any[]) => c[0])
+      .find((m: any) => m.type === "lobbyList");
+    expect(lobbyList.lobbies[0].wager).toBeUndefined();
   });
 
   it("excludes matchmaking games (Public but no publicGameType) from the report", () => {

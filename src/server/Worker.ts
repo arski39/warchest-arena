@@ -41,6 +41,12 @@ import {
   wagerDisabledReason,
   wageringOperational,
 } from "./arena/preflight"; // [ARENA]
+import {
+  listingRefusedForWager,
+  publicWagerLobbiesEnabled,
+  resolvePublicWagerLobbies,
+  wagerRefusedForVisibility,
+} from "./arena/publicLobbies"; // [ARENA]
 import { verifyOnchainMembership } from "./arena/rpcClient";
 import { resolveTierEntryFee, stakeMint } from "./arena/stakeMint"; // [ARENA]
 import { walletRegistry } from "./arena/walletRegistry";
@@ -72,6 +78,10 @@ export async function startWorker() {
   // request that somehow raced them sees a free-to-play server rather than a
   // half-verified one.
   await runWagerPreflight();
+  // [ARENA] After preflight, which it depends on: a public wagered queue is
+  // meaningless without wagering, and the probe it runs is only worth paying
+  // for once wagering is known to work. Fails closed to private-only.
+  await resolvePublicWagerLobbies();
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -332,11 +342,17 @@ export async function startWorker() {
         return res.status(409).json({ error: "listing_host_cheats_enabled" });
       }
 
-      // [ARENA] Wagered lobbies stay private in v1. The wager endpoint already
-      // refuses a listed lobby; without this the host could just do it in the
-      // other order and recruit strangers into a staked match whose winner is
-      // decided by client-majority vote (see CLAUDE.md).
-      if (matchRegistry.isWagered(game.id)) {
+      // [ARENA] Listing a wagered lobby is allowed only where the server can
+      // decide the winner for itself. Before Phase 4 the winner came from a
+      // client-majority vote, and advertising a staked lobby to strangers was
+      // handing a collusion surface to anyone who wanted it.
+      //
+      // publicWagerLobbiesEnabled() is not the env var: it is false until a
+      // replay verification has actually succeeded on this worker (see
+      // arena/publicLobbies.ts). The wager endpoint carries the mirror image of
+      // this check, so the host cannot get the same result by doing it in the
+      // other order.
+      if (listingRefusedForWager(matchRegistry.isWagered(game.id))) {
         return res.status(409).json({ error: "listing_wager_enabled" });
       }
 
@@ -392,9 +408,11 @@ export async function startWorker() {
   // lobby as wagered, so this is also the point where the join gate below
   // starts demanding a wallet signature.
   //
-  // Private lobbies only for v1: winner determination rests on client-majority
-  // consensus (see CLAUDE.md), which is only defensible among players the host
-  // invited. A publicly listed lobby is not.
+  // A publicly listed lobby may be wagered only where the server can determine
+  // the winner itself by replaying the match (Phase 4). Until that was true,
+  // winner determination rested on a client-majority vote, which is only
+  // defensible among players the host invited by hand — see
+  // arena/publicLobbies.ts for why the flag alone is not enough.
   app.post("/api/game/:id/wager", async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
@@ -443,7 +461,12 @@ export async function startWorker() {
         .status(403)
         .json({ error: "Only the lobby creator can set a wager" });
     }
-    if (game.isPublic() || game.isListed()) {
+    // isPublic() is a master-created matchmaking lobby: it has no host to
+    // create the escrow and nobody in it has staked, so it is refused whatever
+    // the gate says. isListed() is a host's own lobby advertised in the public
+    // browser, which is only allowed once this worker has proved it can decide
+    // a winner without asking the clients.
+    if (wagerRefusedForVisibility(game.isPublic(), game.isListed())) {
       return res.status(409).json({ error: "wager_private_lobbies_only" });
     }
     if (game.hasStarted()) {
@@ -536,6 +559,13 @@ export async function startWorker() {
     res.json({
       ...game.gameInfo(),
       wagerAvailable: wageringOperational(),
+      // [ARENA] Whether a wagered lobby may also be publicly listed. Reported
+      // rather than inferred client-side: it is the *resolved* answer (a
+      // verification actually succeeded on this worker), which no client can
+      // work out for itself — the same reason arenaDevBypass is handed down
+      // rather than derived from GameEnv. Without it the host UI would keep
+      // hiding the stake control on a listed lobby the server would accept.
+      wagerPublicLobbies: publicWagerLobbiesEnabled(),
       ...(stake !== null
         ? {
             wagerOptions: {
