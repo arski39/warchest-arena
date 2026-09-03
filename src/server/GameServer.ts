@@ -46,7 +46,9 @@ import { archive, finalizeGameRecord } from "./Archive";
 // [ARENA]
 import { matchRegistry, wagerReadyToStart } from "./arena/matchRegistry";
 // [ARENA]
+import { defaultMapsDir } from "./arena/replayRunner"; // [ARENA]
 import { settle as arenaSettle } from "./arena/settler";
+import { settleVerified } from "./arena/verifiedSettle"; // [ARENA]
 import { Client } from "./Client";
 import { ClientMsgRateLimiter } from "./ClientMsgRateLimiter";
 import { fetchCustomTribes } from "./CustomTribes";
@@ -2128,8 +2130,31 @@ export class GameServer {
         } satisfies PlayerRecord;
       },
     );
-    // [ARENA] Sign and submit settle_match if this was a wagered game.
-    arenaSettle(this.id, this.winner, this.allClients).catch((e: unknown) =>
+    // [ARENA] Phase 4: settle a wagered game on the winner the SERVER derives
+    // by replaying its own turn log, not on `this.winner`, which is whatever a
+    // majority of clients reported. The vote is still passed in, but only so a
+    // disagreement can be logged — it never decides a payout.
+    //
+    // Fire-and-forget on purpose. Verification is CPU-bound and runs for
+    // minutes on its own thread; archiving must not wait for it, and nothing
+    // downstream of archiveGame depends on the outcome. A refusal leaves the
+    // pot escrowed for the program's 24h timeout-cancel to refund.
+    settleVerified(
+      this.id,
+      this.winner,
+      this.allClients,
+      () => ({
+        gameID: this.id,
+        lobbyCreatedAt: this.createdAt,
+        config: this.gameStartInfo.config,
+        players: playerRecords,
+        tribes: this.gameStartInfo.tribes,
+        // The full log, not the filtered form createPartialGameRecord builds.
+        turns: this.turns,
+        mapsDir: defaultMapsDir(),
+      }),
+      this.log,
+    ).catch((e: unknown) =>
       this.log.error("[arena] settlement failed", {
         gameID: this.id,
         error: String(e),
