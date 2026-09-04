@@ -7,8 +7,14 @@ FROM base AS build
 ENV HUSKY=0
 # Copy package files first for better caching
 COPY package*.json ./
+# --ignore-scripts, matching `npm run inst`. Not a hardening flourish:
+# `canvas` is a devDependency with an install script (prebuild-install ||
+# node-gyp rebuild) and node-canvas publishes no linux-arm64 prebuild, so on
+# the ARM box plain `npm ci` drops into node-gyp and dies -- node:24-slim has
+# no python3, make, g++ or cairo/pango headers. Nothing under src/ imports
+# canvas; its only consumer is tests/setup.ts, and tests/ is in .dockerignore.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci --ignore-scripts
 
 # Copy only what's needed for build
 COPY tsconfig.json ./
@@ -73,7 +79,19 @@ COPY --from=build /usr/src/app/static ./static
 
 COPY resources ./resources
 
-# Remove maps because they are not used by the server.
+# Remove the plain map directory: `npm run build-prod` already emitted a
+# content-hashed copy of every file in it under static/_assets/maps (both
+# trees are 499 MB), so shipping both would put ~1 GB of duplicated map data
+# in the image.
+#
+# The server DOES need this data -- Phase 4 replays a wagered match to derive
+# its winner -- so NodeMapLoader resolves through static/asset-manifest.json
+# whenever resources/maps is absent. Upstream's comment here said the maps
+# were "not used by the server", which stopped being true when Phase 4
+# landed; with the loader reading a directory that is not in the image, every
+# wagered match failed verification and refunded on the escrow's 24 h timeout
+# instead of paying out. Do not delete static/_assets/maps, and do not
+# restore this directory expecting the loader to need it.
 RUN rm -rf ./resources/maps
 COPY tsconfig.json ./
 COPY src ./src

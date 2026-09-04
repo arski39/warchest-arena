@@ -112,7 +112,11 @@ function probeTurns(): Turn[] {
   }));
 }
 
-function probeInput(turns: Turn[], mapsDir: string): ReplayInput {
+function probeInput(
+  turns: Turn[],
+  mapsDir: string,
+  staticDir: string | undefined,
+): ReplayInput {
   return {
     gameID: "arenaprobe",
     lobbyCreatedAt: 1_700_000_000_000,
@@ -120,6 +124,7 @@ function probeInput(turns: Turn[], mapsDir: string): ReplayInput {
     players: probePlayers(),
     turns,
     mapsDir,
+    staticDir,
   };
 }
 
@@ -132,12 +137,16 @@ function probeInput(turns: Turn[], mapsDir: string): ReplayInput {
 export async function probeReplayVerification(
   mapsDir: string = defaultMapsDir(),
   timeoutMs: number = PROBE_TIMEOUT_MS,
+  // Only ever passed by tests, which need to deny the probe BOTH map layouts
+  // to exercise the missing-data path. Production leaves it undefined so
+  // NodeMapLoader resolves static/ relative to itself.
+  staticDir?: string,
 ): Promise<ProbeResult> {
   const started = Date.now();
 
   // Pass 1 — play it, and keep the hashes as "what the players saw".
   const observed = await observeReplay(
-    probeInput(probeTurns(), mapsDir),
+    probeInput(probeTurns(), mapsDir, staticDir),
     timeoutMs,
   );
   if (!observed.ok) {
@@ -162,7 +171,7 @@ export async function probeReplayVerification(
     return hash === undefined ? t : { ...t, hash };
   });
   const verdict = await runReplayVerification(
-    probeInput(turns, mapsDir),
+    probeInput(turns, mapsDir, staticDir),
     timeoutMs,
   );
   if (!verdict.ok) {

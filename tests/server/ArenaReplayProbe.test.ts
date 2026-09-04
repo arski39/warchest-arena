@@ -17,6 +17,7 @@
 // filesystem and only ever runs server-side.
 
 import { describe, expect, it } from "vitest";
+import { defaultStaticDir } from "../../src/server/arena/NodeMapLoader";
 import { probeReplayVerification } from "../../src/server/arena/replayProbe";
 
 describe("[ARENA] replay availability probe", () => {
@@ -32,10 +33,38 @@ describe("[ARENA] replay availability probe", () => {
     expect(result.hashesCompared).toBeGreaterThan(0);
   }, 180_000);
 
+  // THE CONTAINER LAYOUT, end to end, without needing Docker.
+  //
+  // The image has no resources/maps -- the Dockerfile deletes it, because
+  // build-prod already emitted a content-hashed copy under static/_assets/maps.
+  // Pointing the probe at a maps directory that does not exist, while leaving
+  // static/ real, reproduces exactly what the deployed process sees. This is
+  // the regression test for the bug where every wagered match in the image
+  // failed verification and refunded on the escrow's 24 h timeout.
+  it("verifies a match with only the image's hashed map assets", async () => {
+    const result = await probeReplayVerification(
+      "/nonexistent/maps",
+      120_000,
+      defaultStaticDir(),
+    );
+    expect(result.ok ? null : result.reason).toBeNull();
+    if (!result.ok) return;
+    expect(result.hashesCompared).toBeGreaterThan(0);
+  }, 180_000);
+
   it("fails, rather than throws, when the map data is missing", async () => {
     // The realistic deployment failure. It has to come back as a reason the
     // gate can log and refuse on, not as an exception that escapes boot.
-    const result = await probeReplayVerification("/nonexistent/maps", 60_000);
+    //
+    // BOTH layouts have to be denied: NodeMapLoader falls back to the build's
+    // hashed copy under static/ when resources/maps is absent, which is the
+    // whole point -- the image only ever has that one. Naming a nonexistent
+    // maps directory alone now finds the real static/ and succeeds.
+    const result = await probeReplayVerification(
+      "/nonexistent/maps",
+      60_000,
+      "/nonexistent/static",
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/could not run a probe match/);

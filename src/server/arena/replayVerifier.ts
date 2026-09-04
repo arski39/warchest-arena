@@ -83,6 +83,13 @@ export interface ReplayInput {
   turns: Turn[];
   /** Absolute path to resources/maps. */
   mapsDir: string;
+  /**
+   * Absolute path to `static/`, where the build's content-hashed copy of the
+   * maps lives. Only used when `mapsDir` is absent, which is the case in the
+   * production image -- see NodeMapLoader. Undefined means the loader's own
+   * module-relative default, which is right in both the checkout and the image.
+   */
+  staticDir?: string;
 }
 
 export type ReplayVerdict =
@@ -170,7 +177,7 @@ async function run(
   const terrain = await loadTerrainMap(
     input.config.gameMap,
     input.config.gameMapSize,
-    new NodeMapLoader(input.mapsDir),
+    new NodeMapLoader(input.mapsDir, input.staticDir),
     false,
   );
 
