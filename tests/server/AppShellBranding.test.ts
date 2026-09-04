@@ -63,6 +63,25 @@ describe("[ARENA] app shell branding", () => {
       expect(html).toContain('property="og:title" content="example.com"');
     });
 
+    it("titles the page from SITE_NAME", async () => {
+      vi.stubEnv("SITE_NAME", "Test Arena");
+      const html = await renderHtmlContent(templatePath);
+      expect(html).toContain("<title>Test Arena</title>");
+    });
+
+    // The title used to be `data-i18n="main.title"`, and ~40 Crowdin-managed
+    // locale files each hardcode "OpenFront (ALPHA)". Only en.json is editable
+    // in this repo, so renaming through the translation system would have left
+    // the fork calling itself OpenFront in every language but English -- which
+    // is the misrepresentation AGPL v3 s7 forbids, not a cosmetic slip. A site
+    // name is a proper noun; it is not translated content.
+    it("does not translate the title, so no locale can restore upstream's", async () => {
+      vi.stubEnv("SITE_NAME", "Test Arena");
+      const html = await renderHtmlContent(templatePath);
+      expect(html).not.toContain('data-i18n="main.title"');
+      expect(html).not.toContain("OpenFront (ALPHA)");
+    });
+
     it("injects SOURCE_REPO_URL into BOOTSTRAP_CONFIG", async () => {
       vi.stubEnv("SOURCE_REPO_URL", "https://github.com/you/fork");
       const html = await renderHtmlContent(templatePath);

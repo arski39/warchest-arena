@@ -249,7 +249,9 @@ export class LangSelector extends LitElement {
       "streaming-now",
     ];
 
-    document.title = this.translateText("main.title") ?? document.title;
+    // [ARENA] The title is no longer translated -- it is the site name, set
+    // from SITE_NAME by the server. Restoring this line would put
+    // "OpenFront (ALPHA)" back in the tab for every non-English locale.
 
     document.querySelectorAll("[data-i18n]").forEach((element) => {
       const key = element.getAttribute("data-i18n");

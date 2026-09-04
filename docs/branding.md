@@ -32,13 +32,36 @@ still a placeholder.
 
 ## Still placeholder — replace before launch
 
-| Thing                                    | Where                                               | Note                                                                                                                                                 |
-| ---------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Logo / favicon art                       | `resources/images/OpenFrontLogo.svg`, `Favicon.svg` | Neutral geometric mark. Same file names as upstream on purpose.                                                                                      |
-| Page title                               | `main.title` in `resources/lang/en.json`            | Still reads "OpenFront (ALPHA)". It is a translated string, so changing it touches Crowdin-managed files — decide the name first.                    |
-| Display font                             | —                                                   | `fonts/OpenFront.ttf` is gone; `Main.ts` catches the load failure and falls back to Inter/sans-serif. Ship your own font at that path to restore it. |
-| Background music                         | —                                                   | Three tracks referenced by `SoundManager.ts` are gone. The loader is wrapped in `safely()`, so music simply does not play.                           |
-| `SITE_NAME`, `SOURCE_REPO_URL`, `DOMAIN` | `.env`                                              | All three must be set for a public deployment.                                                                                                       |
+| Thing                       | Where                                               | Note                                                                                                                                                 |
+| --------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Logo / favicon art          | `resources/images/OpenFrontLogo.svg`, `Favicon.svg` | Neutral geometric mark. Same file names as upstream on purpose.                                                                                      |
+| Display font                | —                                                   | `fonts/OpenFront.ttf` is gone; `Main.ts` catches the load failure and falls back to Inter/sans-serif. Ship your own font at that path to restore it. |
+| Background music            | —                                                   | Three tracks referenced by `SoundManager.ts` are gone. The loader is wrapped in `safely()`, so music simply does not play.                           |
+| `SOURCE_REPO_URL`, `DOMAIN` | `.env`                                              | Both must be set for a public deployment. `SITE_NAME` now carries the placeholder name — see below.                                                  |
+
+## The name
+
+**`Warchest Arena` is a working placeholder, not a settled name.** It is set in
+exactly one place — `SITE_NAME` — so replacing it is one env var and a logo, not
+a sweep through the tree.
+
+That took a change worth not undoing. The page title used to be
+`<title data-i18n="main.title">`, and ~40 Crowdin-managed locale files each
+hardcode upstream's name. This repo may only edit `en.json`, so renaming through
+the translation system would have left the fork calling itself OpenFront in
+every language but English — the misrepresentation §7 forbids, not a cosmetic
+slip. **A site name is a proper noun; it is not translated content.** The title
+now renders from `siteName`, the same variable `og:title` already used, and
+`LangSelector.applyTranslation()` no longer overwrites it.
+
+`main.title` is **removed from `en.json`** — the repo refuses unused keys
+(`TranslationSystem.test.ts` → `en.json keys stay in sync with source usage`).
+The ~40 Crowdin-managed locale files still carry it, harmlessly. Do not
+re-add it to `en.json` and do not re-wire the title through it.
+_Guarded by_ `AppShellBranding.test.ts` →
+`does not translate the title, so no locale can restore upstream's`.
+
+Still open on the name: the domain, and whether the placeholder becomes final.
 
 ## Deliberately left alone
 

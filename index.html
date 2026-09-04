@@ -6,7 +6,20 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
-    <title data-i18n="main.title">OpenFront (ALPHA)</title>
+    <!--
+      [ARENA] The page title comes from SITE_NAME, not from the "main.title"
+      translation key. A site name is a proper noun: every one of the ~40
+      locale files hardcodes upstream's name, and this repo may only edit
+      en.json (the rest are Crowdin-managed), so renaming through the
+      translation system would have left the fork presenting itself as
+      OpenFront in every language but English -- exactly what AGPL v3 s7
+      forbids. Sourcing it from siteName also means the final name is one env
+      var away. See docs/branding.md.
+
+      Both renderers supply siteName already (RenderHtml.ts and
+      vite.config.ts), so this adds no new template variable.
+    -->
+    <title><%= siteName %></title>
     <link rel="manifest" href="<%- manifestHref %>" />
     <link rel="icon" type="image/svg+xml" href="<%- faviconHref %>" />
 
