@@ -98,10 +98,20 @@ export const MATCH_ACCOUNT_LAYOUT = {
   createdAt: 757,
   nonce: 765,
   bump: 773,
+  // Appended after `bump` on the Rust side deliberately, so adding it shifted
+  // no existing offset. See the note on MatchAccount::treasury.
+  treasury: 774,
 } as const;
 
 /** Total on-chain size, matching `MatchAccount::SPACE`. */
-export const MATCH_ACCOUNT_SIZE = 774;
+export const MATCH_ACCOUNT_SIZE = 806;
+
+/**
+ * The all-zero key, which `create_match` accepts as "no treasury" and only
+ * when `rake_bps` is 0. Written out rather than using `PublicKey.default` so
+ * the meaning is named at every use.
+ */
+export const NO_TREASURY = new PublicKey(new Uint8Array(32));
 
 /** Width of the fixed-size `players` / `stakes` slots. */
 const PUBKEY_SIZE = 32;
@@ -203,6 +213,17 @@ export interface CreateMatchParams {
   maxPlayers: number;
   rakeBps: number;
   nonce: bigint;
+  /**
+   * Token account the rake will be paid into, recorded on the match so
+   * `settle_match` cannot be handed a different one later.
+   *
+   * Required whenever `rakeBps > 0`; the program refuses the match otherwise,
+   * rather than letting it be created and then fail at settlement with the pot
+   * already in the vault. Omit it at `rakeBps === 0`, where nothing is ever
+   * transferred to it — this encodes the all-zero key, which is the only value
+   * the program accepts as "no treasury".
+   */
+  treasury?: PublicKey;
 }
 
 /**
@@ -211,16 +232,24 @@ export interface CreateMatchParams {
  * token_program, associated_token_program, system_program, rent.
  *
  * Args are Borsh-encoded in declaration order:
- * `entry_fee: u64, max_players: u8, rake_bps: u16, nonce: u64` — 27 bytes with
- * the discriminator.
+ * `entry_fee: u64, max_players: u8, rake_bps: u16, nonce: u64, treasury: pubkey`
+ * — 59 bytes with the discriminator.
  */
 export function buildCreateMatchIx(params: CreateMatchParams): {
   ix: TransactionInstruction;
   matchPda: PublicKey;
   vault: PublicKey;
 } {
-  const { programId, authority, mint, entryFee, maxPlayers, rakeBps, nonce } =
-    params;
+  const {
+    programId,
+    authority,
+    mint,
+    entryFee,
+    maxPlayers,
+    rakeBps,
+    nonce,
+    treasury,
+  } = params;
 
   if (
     !Number.isInteger(maxPlayers) ||
@@ -232,6 +261,12 @@ export function buildCreateMatchIx(params: CreateMatchParams): {
   if (!Number.isInteger(rakeBps) || rakeBps < 0 || rakeBps > MAX_RAKE_BPS) {
     throw new Error(`rakeBps must be 0..${MAX_RAKE_BPS}, got ${rakeBps}`);
   }
+  // Refused here as well as on chain. The program's own `TreasuryRequired` is
+  // the authority, but a lobby that fails on submission tells the host far less
+  // than one that never builds the transaction.
+  if (rakeBps > 0 && (treasury === undefined || treasury.equals(NO_TREASURY))) {
+    throw new Error(`rakeBps is ${rakeBps} but no treasury was given`);
+  }
 
   const [matchPda] = deriveMatchPda(programId, authority, nonce);
   const vault = deriveVaultAta(matchPda, mint);
@@ -242,6 +277,7 @@ export function buildCreateMatchIx(params: CreateMatchParams): {
     Uint8Array.from([maxPlayers]),
     u16LE(rakeBps),
     u64LE(nonce),
+    (treasury ?? NO_TREASURY).toBytes(),
   ]);
 
   const ix = new TransactionInstruction({
@@ -336,6 +372,16 @@ export interface MatchAccountView {
   createdAt: bigint;
   nonce: bigint;
   bump: number;
+  /**
+   * The token account `settle_match` will pay the rake into, fixed when the
+   * match was created. All-zero (`PublicKey.default`) when `rakeBps` is 0,
+   * which is the only case the program allows it to be unset.
+   *
+   * The settler reads it from here rather than from its own configuration, so
+   * an operator who repoints TREASURY_TOKEN_ACCOUNT cannot redirect the rake on
+   * a match that was already created under the old one.
+   */
+  treasury: PublicKey;
 }
 
 /**
@@ -415,6 +461,7 @@ export function decodeMatchAccount(
     createdAt: view.getBigInt64(L.createdAt, true),
     nonce: view.getBigUint64(L.nonce, true),
     bump: data[L.bump]!,
+    treasury: pubkeyAt(L.treasury),
   };
 }
 

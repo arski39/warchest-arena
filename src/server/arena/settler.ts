@@ -13,6 +13,7 @@ import {
   buildSettleMatchIx,
   deriveAta,
   MatchStatus,
+  NO_TREASURY,
   settleMessagePreimage,
   type MatchAccountView,
 } from "../../core/arena/arenaProgram";
@@ -176,27 +177,36 @@ export function buildScores(
 }
 
 /**
- * The rake destination. settle_match requires the account even at 0 bps, in
- * which case it transfers nothing to it — so the winner's own token account is
- * a safe stand-in and saves operators configuring something never used.
+ * The rake destination, taken from the match itself rather than from this
+ * process's configuration.
+ *
+ * It used to read TREASURY_TOKEN_ACCOUNT here, which meant the destination was
+ * chosen at settlement — nothing on chain pinned it and the signed digest does
+ * not cover it, so the authority could send the house cut anywhere. The
+ * treasury is now recorded on the MatchAccount when the match is created and
+ * `settle_match` refuses any other account, so reading it from anywhere else
+ * would at best agree and at worst produce a rejected transaction.
+ *
+ * Reading it from chain also survives the case the registry does not: an
+ * operator who repoints TREASURY_TOKEN_ACCOUNT mid-flight cannot redirect the
+ * rake on matches created under the old one, and a match recovered by the
+ * sweeper carries its own answer.
+ *
+ * settle_match wants the account even at 0 bps, where it transfers nothing to
+ * it, so the winner's own token account stands in and no rake-free deployment
+ * has to configure one.
  */
 function treasuryTokenAccount(
   match: MatchAccountView,
   winnerToken: PublicKey,
 ): PublicKey | null {
-  const configured = process.env.TREASURY_TOKEN_ACCOUNT;
-  if (configured) {
-    try {
-      return new PublicKey(configured);
-    } catch {
-      console.error(
-        `[arena/settler] TREASURY_TOKEN_ACCOUNT "${configured}" is not an address`,
-      );
-      return null;
-    }
-  }
-  if (match.rakeBps > 0) return null; // the rake would go nowhere
-  return winnerToken;
+  if (match.rakeBps === 0) return winnerToken;
+  // create_match refuses a non-zero rake with no treasury, so this is
+  // unreachable for any match this program created. Kept because the
+  // alternative to returning null is submitting a transaction that cannot
+  // succeed, and the caller already knows how to decline.
+  if (match.treasury.equals(NO_TREASURY)) return null;
+  return match.treasury;
 }
 
 async function payOut(
@@ -218,7 +228,7 @@ async function payOut(
   const treasuryToken = treasuryTokenAccount(match, winnerToken);
   if (treasuryToken === null) {
     console.error(
-      `[arena/settler] rake is ${match.rakeBps} bps but TREASURY_TOKEN_ACCOUNT is unset; refusing to settle game ${gameId}`,
+      `[arena/settler] rake is ${match.rakeBps} bps but the match records no treasury; refusing to settle game ${gameId}`,
     );
     return;
   }

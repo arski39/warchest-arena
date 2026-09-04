@@ -63,6 +63,39 @@ export function arenaRakeBps(): number {
 }
 
 /**
+ * [ARENA] The token account the rake is paid into, or null when there is no
+ * rake to pay.
+ *
+ * Read here, at match creation, and written onto the MatchAccount — which is
+ * what lets `settle_match` pin the destination instead of trusting whatever the
+ * settler passes. Before this the account was chosen at settlement time and
+ * nothing on chain constrained it; the digest does not cover it either, so the
+ * house cut was the one thing still left to the authority's discretion at
+ * payout.
+ *
+ * Throws rather than defaulting: preflight already refuses to boot a server
+ * with a rake and no treasury, so reaching here with one unset means the
+ * environment changed under a running process, and creating a match that can
+ * never settle is worse than refusing to create it.
+ */
+export function arenaTreasury(rakeBps: number): PublicKey | null {
+  if (rakeBps === 0) return null;
+  const raw = process.env.TREASURY_TOKEN_ACCOUNT;
+  if (!raw) {
+    throw new WagerUnavailableError(
+      `ARENA_RAKE_BPS is ${rakeBps} but TREASURY_TOKEN_ACCOUNT is unset`,
+    );
+  }
+  try {
+    return new PublicKey(raw);
+  } catch {
+    throw new WagerUnavailableError(
+      `TREASURY_TOKEN_ACCOUNT is not a valid address ("${raw}")`,
+    );
+  }
+}
+
+/**
  * [ARENA] Ceiling on a single seat's stake, in token base units, or null for
  * no ceiling. Operator-set like the rake — a lobby host must not be able to
  * raise the house's exposure.
@@ -152,6 +185,9 @@ export async function createWageredMatch(
   const mint = new PublicKey(config.mint);
   const nonce = nonceFromGameId(gameId);
   const rakeBps = arenaRakeBps();
+  // [ARENA] Fixed on the match at creation, so settle_match can refuse any
+  // other destination. Undefined at 0 bps, where there is no rake to send.
+  const treasury = arenaTreasury(rakeBps);
 
   const { ix, matchPda, vault } = buildCreateMatchIx({
     programId,
@@ -161,6 +197,7 @@ export async function createWageredMatch(
     maxPlayers: config.maxPlayers,
     rakeBps,
     nonce,
+    ...(treasury === null ? {} : { treasury }),
   });
 
   // The authority pays rent for the MatchAccount and the vault ATA. It never
