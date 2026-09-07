@@ -1,0 +1,99 @@
+# [ARENA] Caddy config for the fork. Install to /etc/caddy/Caddyfile.
+#
+# Serves a Cloudflare ORIGIN CERTIFICATE rather than doing ACME. That is a
+# deliberate choice, not a workaround:
+#
+#   - the apex and www are Cloudflare-PROXIED, so Cloudflare's "Always Use
+#     HTTPS" and Universal SSL already handle the public-facing half, and an
+#     ACME HTTP-01 challenge would have to fight both
+#   - the origin cert is valid 15 years and covers warchest-arena.com AND
+#     *.warchest-arena.com, so the grey-clouded api. host is covered too
+#   - the accepted cost: an origin cert is trusted ONLY by Cloudflare. Leaving
+#     Cloudflare means getting a real certificate first.
+#
+# Cloudflare's SSL/TLS mode must be **Full (strict)**. Flexible sends plaintext
+# to this box, which breaks the auth refresh cookie's Secure attribute; plain
+# Full does not validate this certificate, which throws away the point of it.
+#
+# Install:
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+{
+	# We supply the certificate, so Caddy must not try to obtain one. It also
+	# must not add its own http->https redirects for the proxied hosts, because
+	# Cloudflare already redirects there and both together is
+	# ERR_TOO_MANY_REDIRECTS. The explicit http:// block below handles the one
+	# host Cloudflare is NOT in front of.
+	auto_https disable_redirects
+}
+
+(origin_tls) {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+}
+
+# Only api. can actually be reached over plain http from outside -- it is
+# DNS-only, so Cloudflare never sees it. The apex and www are listed for the
+# case where someone reaches this box by IP or with Cloudflare bypassed.
+http://warchest-arena.com, http://www.warchest-arena.com, http://api.warchest-arena.com {
+	redir https://{host}{uri} permanent
+}
+
+# One canonical origin. canonical/og:url derive from DOMAIN (the apex), and a
+# second live origin means a second cookie scope and a second CORS origin for
+# no benefit.
+https://www.warchest-arena.com {
+	import origin_tls
+	redir https://warchest-arena.com{uri} permanent
+}
+
+https://warchest-arena.com {
+	import origin_tls
+
+	# nginx inside the container listens on 80; the Dockerfile has no EXPOSE,
+	# so warchest.sh publishes it to loopback.
+	#
+	# reverse_proxy passes WebSocket upgrades through without configuration,
+	# which matters: every live game's connection rides /wN, and nginx already
+	# sets Upgrade/Connection on that location.
+	#
+	# Do NOT add `encode` here -- the worker already runs compression()
+	# middleware, and compressing twice costs CPU for nothing.
+	reverse_proxy 127.0.0.1:8080
+}
+
+# api. is intentionally DNS-only in Cloudflare. The game container fetches
+# /.well-known/jwks.json, /users/@me, /cosmetics.json and /reserved_clan_tags
+# from this hostname SERVER-SIDE, from this same box; proxying it would send
+# local traffic out to Cloudflare and back, and add a third-party dependency to
+# a call that never needs to leave the machine.
+#
+# The hostname is not configurable. AuthEnv.issuer(), ServerEnv.jwtIssuer() and
+# ClientEnv.jwtIssuer() each independently COMPUTE https://api.$DOMAIN, and
+# jwtVerify rejects any other issuer. AUTH_PORT changes only the listen port.
+https://api.warchest-arena.com {
+	import origin_tls
+	reverse_proxy 127.0.0.1:8787
+}
+
+# ---------------------------------------------------------------------------
+# On X-Forwarded-For, because it decides whether the rate limiter works.
+#
+# The chain the game server sees is:
+#
+#   client -> Cloudflare -> Caddy -> nginx -> Express
+#
+# Cloudflare sets X-Forwarded-For to the client IP; Caddy appends Cloudflare's
+# edge IP; nginx appends Caddy's. Express with `trust proxy = 3`
+# (Master.ts, Worker.ts) walks back past all three and lands on the real client.
+# That is why those values are correct AS SHIPPED and need no patch.
+#
+# The auth service is different and also correct as shipped: api. is DNS-only,
+# so its chain is just Caddy -> Express, and routes.ts sets `trust proxy = 1`.
+#
+# If you ever grey-cloud the apex, `trust proxy` must drop to 2 in Master.ts and
+# Worker.ts -- otherwise req.ip takes a client-supplied XFF entry, the per-IP
+# rate limiter becomes trivially bypassable, and the anonymised IPs in the logs
+# stop meaning anything.
+# ---------------------------------------------------------------------------

@@ -1,0 +1,9 @@
+# [ARENA] Files that are executed by a Linux shell must be checked out with LF
+# endings regardless of the developer's platform or core.autocrlf setting.
+#
+# A CRLF shebang line fails as `bad interpreter: /usr/bin/env bash^M`, which
+# names neither the file nor the real cause, and it only appears on the target
+# box. The blobs are already LF; this stops a future clone on a differently
+# configured Windows machine from silently changing that.
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf

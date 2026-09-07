@@ -27,8 +27,9 @@ import { resolveStakeMint } from "./stakeMint"; // [ARENA]
 /**
  * Minimum authority balance, in lamports, before wagering is offered.
  *
- * A match locks roughly 0.0084 SOL of rent — a MatchAccount plus the vault ATA
- * — while it is live, plus fees and any ATA the settler has to create.
+ * A match locks roughly 0.0085 SOL of rent — an 806-byte MatchAccount
+ * (0.0065) plus the 165-byte vault ATA (0.0020) — while it is live, plus fees
+ * and any ATA the settler has to create.
  * `close_match` returns both once the match is terminal and the vault is empty,
  * and the sweeper calls it, so this is a float rather than a permanent cost.
  * It is still a floor worth holding: the rent comes back later, not before the
