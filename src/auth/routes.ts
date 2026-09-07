@@ -17,6 +17,7 @@
 // to stake.
 import express, { type Express, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
+import { z } from "zod";
 import { walletLoginMessage } from "../core/arena/authMessage";
 import { verifyEd25519Signature } from "../core/arena/walletSignature";
 import type { AuthLog } from "./AuthLogger";
@@ -40,6 +41,7 @@ import {
   type SessionProvider,
   type TokenIssuerConfig,
 } from "./tokens";
+import { verifyTurnstileToken, type FetchLike } from "./turnstile"; // [ARENA]
 import { buildUserMe } from "./userMe";
 
 export type AuthAppDeps = {
@@ -57,10 +59,32 @@ export type AuthAppDeps = {
   log: AuthLog;
   /** False in tests, where a shared limiter would couple unrelated cases. */
   rateLimit?: { windowMs: number; limit: number } | false;
+  /**
+   * [ARENA] Turnstile secret. Empty (the default) leaves `/join_verify`
+   * UNREGISTERED, so it 404s and the game server falls open — the behaviour
+   * this fork has always had. See AuthEnv.turnstileSecretKey().
+   */
+  turnstileSecret?: string;
+  /** [ARENA] Injectable for tests; production uses global fetch. */
+  turnstileFetch?: FetchLike;
+  /** [ARENA] Dev relaxes the hostname check to localhost. */
+  isDev?: boolean;
 };
 
 /** Max JSON body. Every request here is a handful of base64 strings. */
 const MAX_BODY = "8kb";
+
+/**
+ * [ARENA] The body `JoinVerify.ts` sends. Shaped by upstream's caller, not by
+ * us — `verifyJoin` posts exactly `{ ip, token, username, clanTag }`, with the
+ * token null for an already-admitted reconnect.
+ */
+const JoinVerifyRequestSchema = z.object({
+  ip: z.string().optional(),
+  token: z.string().nullable(),
+  username: z.string(),
+  clanTag: z.string().nullable().optional(),
+});
 
 export function createAuthApp(deps: AuthAppDeps): Express {
   const { key, tokens, cookie, log } = deps;
@@ -281,6 +305,64 @@ export function createAuthApp(deps: AuthAppDeps): Express {
   // an error loop for a catalogue this fork does not have: no cosmetics are
   // sold, and with no reserved tags every clan tag is treated as fictional,
   // which is what the fail-open checker already does.
+  // [ARENA] The server half of Turnstile.
+  //
+  // Registered ONLY when a secret is configured. Unregistered it 404s and
+  // JoinVerify.ts falls open, which is this fork's long-standing behaviour and
+  // is the honest default: a route that exists and approves everything looks
+  // like bot protection while being none.
+  //
+  // The contract is upstream's, because JoinVerify.ts is the caller and is an
+  // upstream file: POST { ip, token, username, clanTag } with x-api-key, and
+  // { status: "approved", username, clanTag } | { status: "rejected", reason }.
+  //
+  // What this implementation deliberately does NOT do is moderate names.
+  // Upstream's worker ran an LLM name check here and returned a possibly
+  // rewritten username; this fork has no such service, so names pass through
+  // unchanged. The game server already screens locally via Censor.ts — that is
+  // its documented fail-open path — so nothing regresses, but do not mistake an
+  // "approved" here for a name having been vetted.
+  if (deps.turnstileSecret !== undefined && deps.turnstileSecret !== "") {
+    const turnstileSecret = deps.turnstileSecret;
+    app.post("/join_verify", limiter, async (req, res) => {
+      if (apiKeyRejected(req)) {
+        res.status(403).json({ error: "invalid_api_key" });
+        return;
+      }
+      const parsed = JoinVerifyRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ status: "rejected", reason: "malformed_body" });
+        return;
+      }
+      const { ip, token, username, clanTag } = parsed.data;
+
+      // SECURITY: a null token SKIPS siteverify. That is upstream's contract,
+      // not an oversight -- a Turnstile token is single-use, so an
+      // already-admitted player reconnecting has no unspent token to present.
+      // planJoinVerify() on the game server is what guarantees a FIRST join
+      // never arrives with a null token; forwarding one would be a full
+      // Turnstile bypass. The x-api-key is the fence that keeps this reachable
+      // only by the game server.
+      if (token !== null) {
+        const verdict = await verifyTurnstileToken({
+          secret: turnstileSecret,
+          token,
+          remoteIp: ip,
+          domain: tokens.audience,
+          isDev: deps.isDev === true,
+          fetchImpl: deps.turnstileFetch,
+        });
+        if (!verdict.ok) {
+          log.debug("join_verify rejected", { reason: verdict.reason });
+          res.json({ status: "rejected", reason: verdict.reason });
+          return;
+        }
+      }
+
+      res.json({ status: "approved", username, clanTag: clanTag ?? null });
+    });
+  }
+
   app.get("/cosmetics.json", (_req, res) => {
     res.json({ patterns: {}, flags: {} });
   });

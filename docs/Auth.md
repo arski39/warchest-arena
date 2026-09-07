@@ -115,3 +115,45 @@ per-match signature is refused as a login.
 `npm run dev:auth` runs the client, the game server and the auth service
 together, which is how a real JWT session (and therefore a real `jti` for the
 arena's wallet-signature nonce) gets exercised locally.
+
+## `POST /join_verify` — the server half of Turnstile
+
+Added by this fork. The widget always rendered and `src/server/JoinVerify.ts`
+always POSTed here, but the endpoint lived in upstream's **closed** api worker,
+so it 404'd and every join fell open. The token nothing checked was decoration.
+
+**Contract** (upstream's, because the caller is an upstream file):
+
+```
+POST /join_verify        x-api-key: <API_KEY>
+{ ip, token, username, clanTag }
+-> { status: "approved", username, clanTag }
+ | { status: "rejected", reason }
+```
+
+- **Registered only when `TURNSTILE_SECRET_KEY` is set.** Unset, the route does
+  not exist and the old fail-open behaviour is unchanged. An endpoint that
+  existed and approved everything would look like bot protection while being
+  none, which is worse than a visible 404. The service logs which state it is in
+  at boot.
+- **A null token skips siteverify.** That is the contract, not a hole: a
+  Turnstile token is single-use, so an already-admitted player reconnecting has
+  none left to present. `planJoinVerify()` on the game server guarantees a
+  _first_ join never arrives with a null token — forwarding one would be a full
+  bypass. The `x-api-key` is what keeps this route reachable only by the game
+  server.
+- **Failures reject; they never approve.** A token is single-use, so a timeout
+  is not retried — re-submitting can redeem an already-spent token and turn a
+  hiccup into a hard rejection of a legitimate player. The fail-open decision
+  belongs to `JoinVerify.ts`, which already treats a non-verdict as its own
+  call.
+- **The hostname is checked** against `DOMAIN` and its subdomains (plus
+  localhost in dev). Defence in depth — the site key is already domain-scoped in
+  the dashboard — but it catches a key shared with another property.
+- **Names are not moderated.** Upstream's worker ran an LLM check and could
+  return a rewritten username; this fork passes them through. The game server
+  screens locally via `Censor.ts`. An `approved` here does not mean a name was
+  vetted.
+
+`tests/server/AuthTurnstile.test.ts` pins all of the above, and the hostname pin
+and the reject path are mutation-checked.

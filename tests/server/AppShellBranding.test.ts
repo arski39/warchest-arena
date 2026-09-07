@@ -105,6 +105,12 @@ describe("[ARENA] app shell branding", () => {
       ["Google Tag Manager", "googletagmanager"],
       ["Playwire RAMP shim", "window.ramp"],
       ["hard-coded openfront.io URL", "openfront.io"],
+      // Missed by the first analytics sweep, which caught the Google tags
+      // above: this one sits further down the file under its own "Analytics"
+      // heading. The token in it is upstream's, so it reported this fork's
+      // visitors into OpenFront's Cloudflare account.
+      ["Cloudflare Web Analytics beacon", "cloudflareinsights.com"],
+      ["upstream's beacon token", "03d93e6fefb349c28ee69b408fa25a13"],
     ])("no %s", async (_label, needle) => {
       const html = await renderHtmlContent(templatePath);
       expect(html).not.toContain(needle);

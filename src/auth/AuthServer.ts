@@ -42,7 +42,21 @@ export async function startAuthServer(): Promise<void> {
       AuthEnv.extraAllowedOrigins(),
     ),
     log: authLogger,
+    // [ARENA] Empty leaves /join_verify unregistered; see AuthEnv.
+    turnstileSecret: AuthEnv.turnstileSecretKey(),
+    isDev,
   });
+
+  // [ARENA] Said out loud, because the failure is silent otherwise: with no
+  // secret the widget still renders and every join is admitted unverified.
+  if (AuthEnv.turnstileSecretKey() === "") {
+    authLogger.warn(
+      "TURNSTILE_SECRET_KEY is unset — /join_verify is not served, so the " +
+        "game server falls open and the Turnstile widget verifies nothing.",
+    );
+  } else {
+    authLogger.info("Turnstile siteverify enabled on /join_verify");
+  }
 
   const port = AuthEnv.port();
   app.listen(port, () => {

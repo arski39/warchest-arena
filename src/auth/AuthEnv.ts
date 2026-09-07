@@ -100,6 +100,22 @@ export class AuthEnv {
     return process.env.API_KEY ?? "";
   }
 
+  /**
+   * [ARENA] Turnstile's SECRET key — the server half of the widget.
+   *
+   * Empty means `/join_verify` is **not registered at all**, so the route 404s
+   * and `JoinVerify.ts` falls open exactly as it does today. That is deliberate
+   * and is the honest default: an endpoint that exists but approves everything
+   * looks like bot protection while being none, which is strictly worse than
+   * an endpoint that is visibly absent.
+   *
+   * Never reaches the browser. The public site key is `TURNSTILE_SITE_KEY` on
+   * the game server; this one is read only here.
+   */
+  static turnstileSecretKey(): string {
+    return process.env.TURNSTILE_SECRET_KEY ?? "";
+  }
+
   static accessTtlSeconds(): number {
     return ACCESS_TTL_SECONDS;
   }

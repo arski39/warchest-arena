@@ -438,12 +438,18 @@
       });
     </script>
 
-    <!-- Analytics -->
-    <script
-      defer
-      src="https://static.cloudflareinsights.com/beacon.min.js"
-      data-cf-beacon='{"token": "03d93e6fefb349c28ee69b408fa25a13"}'
-    ></script>
+    <!--
+      [ARENA] Upstream's Cloudflare Web Analytics beacon was removed here, for
+      the same reason their Google Ads and GA4 tags were: the token in it is
+      OpenFront's, so in a fork it reports YOUR visitors into THEIR account.
+      That is not a licensing nicety -- it is other people's traffic data going
+      somewhere the people generating it did not agree to.
+
+      If you want analytics, add your own token. Do not restore theirs, and
+      reject any upstream merge that re-adds it -- this file is a merge target.
+      It survived the first analytics sweep (which caught the Google tags) only
+      because it is further down the file under its own heading.
+    -->
     <script type="module" src="/src/client/Main.ts"></script>
     <footer>
       <script
