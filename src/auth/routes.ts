@@ -119,6 +119,29 @@ export function createAuthApp(deps: AuthAppDeps): Express {
     return provided !== deps.apiKey;
   }
 
+  /**
+   * [ARENA] Strict variant: a MISSING key is refused too.
+   *
+   * `apiKeyRejected` deliberately lets a header-less request through, because on
+   * every other route the bearer token is the real authorisation and the key is
+   * only a second fence. `/join_verify` has no bearer token — the key is the
+   * ONLY fence there — so "absent means allowed" leaves it open to anyone who
+   * can resolve api.$DOMAIN.
+   *
+   * That is not a Turnstile bypass (the game server decides which token to
+   * send, and planJoinVerify is what stops a first join arriving with none),
+   * but it is an unauthenticated endpoint that spends this deployment's
+   * Cloudflare siteverify quota on request. The game server always sends the
+   * header, so requiring it costs nothing.
+   *
+   * An empty configured key still disables the check, matching the dev default
+   * everywhere else in this file.
+   */
+  function apiKeyMissingOrWrong(req: Request): boolean {
+    if (deps.apiKey === "") return false;
+    return req.headers["x-api-key"] !== deps.apiKey;
+  }
+
   function setRefreshCookie(res: Response, token: string): void {
     res.setHeader(
       "Set-Cookie",
@@ -325,7 +348,8 @@ export function createAuthApp(deps: AuthAppDeps): Express {
   if (deps.turnstileSecret !== undefined && deps.turnstileSecret !== "") {
     const turnstileSecret = deps.turnstileSecret;
     app.post("/join_verify", limiter, async (req, res) => {
-      if (apiKeyRejected(req)) {
+      // Strict: this route has no bearer token, so the key is the only fence.
+      if (apiKeyMissingOrWrong(req)) {
         res.status(403).json({ error: "invalid_api_key" });
         return;
       }

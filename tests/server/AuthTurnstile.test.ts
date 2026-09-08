@@ -225,7 +225,28 @@ describe("POST /join_verify", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("refuses a caller without the shared api key", async () => {
+  test("refuses a caller that sends NO api key at all", async () => {
+    // The general apiKeyRejected() lets a header-less request through, because
+    // every other route has a bearer token doing the real work. This one does
+    // not, so the key is the only fence and absent must not mean allowed --
+    // otherwise anyone who can resolve api.$DOMAIN can spend this deployment's
+    // Cloudflare siteverify quota.
+    const { fetchImpl, calls } = stubSiteverify({ success: true });
+    await withApp(
+      { turnstileSecret: SECRET, turnstileFetch: fetchImpl },
+      async (base) => {
+        const res = await fetch(`${base}/join_verify`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(A_JOIN),
+        });
+        expect(res.status).toBe(403);
+      },
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses a caller with the WRONG api key", async () => {
     const { fetchImpl, calls } = stubSiteverify({ success: true });
     await withApp(
       { turnstileSecret: SECRET, turnstileFetch: fetchImpl },
