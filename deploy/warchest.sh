@@ -71,8 +71,10 @@ check_secret() {
     [ -f "$path" ] || die "$label is $path, which is not a file on this host."
     uid="$(stat -c '%u' "$path")"
     mode="$(stat -c '%a' "$path")"
-    # uid 1000 inside the container is `node`; on Ubuntu cloud images uid 1000
-    # is also `ubuntu`, so owning it as ubuntu is the simple correct answer.
+    # uid 1000 inside the container is `node`. Do NOT assume your login user is
+    # uid 1000 -- on the Oracle Ubuntu image `ubuntu` is 1001 and `opc` is 1000,
+    # so a key created by the logged-in user is mode 600 and owned by the WRONG
+    # uid, and the container cannot read it. Check, do not guess.
     if [ "$uid" != "$CONTAINER_UID" ] && [ "${mode: -1}" -lt 4 ]; then
         die "$path is owned by uid $uid with mode $mode — the container's node user (uid $CONTAINER_UID) cannot read it.
     Fix: sudo chown $CONTAINER_UID:$CONTAINER_UID '$path' && sudo chmod 600 '$path'"
@@ -144,10 +146,31 @@ swap_to() {
     start_containers "$1"
 }
 
+# Reads the env file the way `docker run --env-file` does: plain KEY=VALUE
+# lines, no shell evaluation, no quote stripping.
+#
+# NOT `.` / `source`. The file legitimately contains `SITE_NAME=Warchest Arena`,
+# and sourcing that runs `Arena` as a command. Quoting the value in the file
+# would fix the sourcing and break the container instead, because docker's
+# --env-file does not strip quotes -- the site name would come out with the
+# quotes in it. Parsing here is the only version where both readers agree.
 load_env() {
     [ -f "$ENV_FILE" ] || die "$ENV_FILE not found. Copy deploy/warchest.env.example and fill it in."
-    # shellcheck disable=SC1090
-    set -a; . "$ENV_FILE"; set +a
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        key=${line%%=*}
+        val=${line#*=}
+        # Ignore anything that is not a plain shell-safe name, rather than
+        # trying to interpret it.
+        case "$key" in
+            [A-Za-z_]*) ;;
+            *) continue ;;
+        esac
+        printf -v "$key" '%s' "$val"
+        export "${key?}"
+    done < "$ENV_FILE"
 }
 
 # ------------------------------------------------------------------- rollback
