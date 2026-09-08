@@ -414,7 +414,7 @@ describe("[ARENA] recovery sweeper", () => {
     });
 
     it("refuses an account the arena program does not own", async () => {
-      // The decoder's owner check. Without it, any 774-byte account could be
+      // The decoder's owner check. Without it, any 806-byte account could be
       // made to decode into a plausible match with attacker-chosen stakers.
       const { sweepOrphanedMatches, OPEN_SWEEP_AFTER_MS } = await load();
       const foreign = account({
