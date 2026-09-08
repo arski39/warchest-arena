@@ -29,6 +29,14 @@ import {
 
 const CARD_BG = "bg-surface";
 
+// [ARENA] The two card treatments, named rather than repeated inline. There is
+// exactly one primary card and it marks the site's primary mode — the accent
+// belonged to Solo and now belongs to 1v1.
+const PRIMARY_CARD =
+  "bg-malibu-blue hover:bg-aquarius active:bg-malibu-blue/80 hover:scale-y-105 hover:scale-x-[1.01]";
+const SECONDARY_CARD =
+  "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]";
+
 @customElement("game-mode-selector")
 export class GameModeSelector extends LitElement {
   @state() private lobbies: PublicGames | null = null;
@@ -129,49 +137,65 @@ export class GameModeSelector extends LitElement {
 
     return html`
       <div class="flex flex-col gap-4 w-full px-4 sm:px-0 mx-auto pb-4 sm:pb-0">
-        <!-- Solo: mobile only, top -->
-        <div class="sm:hidden h-14">
+        <!-- [ARENA] 1v1 first, and biggest: it is the primary mode. Two
+             stakes, one pot, and no team-win ambiguity for settle_match to
+             refuse. The accent treatment used to mark Solo. -->
+        <div class="h-16 sm:h-20">
+          ${this.renderSmallActionCard(
+            translateText("main.duel"),
+            this.openDuel,
+            PRIMARY_CARD,
+          )}
+        </div>
+
+        <!-- Solo, and the private-lobby actions. These used to be duplicated
+             for mobile and desktop because the two breakpoints ordered them
+             differently around the lobby grid; now that the grid is last in
+             both, one copy serves both. -->
+        <div class="h-14">
           ${this.renderSmallActionCard(
             translateText("main.solo"),
             this.openSinglePlayerModal,
-            "bg-malibu-blue hover:bg-aquarius active:bg-malibu-blue/80 hover:scale-y-105 hover:scale-x-[1.01]",
+            SECONDARY_CARD,
           )}
         </div>
-        <!-- Create/ranked/join: mobile only, below solo -->
-        <div class="sm:hidden grid grid-cols-3 gap-4 h-14">
+        <div class="grid grid-cols-3 gap-4 h-14">
           ${this.renderSmallActionCard(
             translateText("main.create"),
             this.openHostLobby,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
+            SECONDARY_CARD,
           )}
           ${this.renderSmallActionCard(
             translateText("mode_selector.ranked_title"),
             this.openRankedMenu,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
+            SECONDARY_CARD,
           )}
           ${this.renderSmallActionCard(
             translateText("main.join"),
             this.openJoinLobby,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
+            SECONDARY_CARD,
             this.hostedLobbyCount(),
           )}
         </div>
+
         <!-- iOS Add to Home Screen banner -->
         <ios-add-to-home-screen-banner
           class="no-crazygames"
         ></ios-add-to-home-screen-banner>
 
-        <!-- Game cards grid -->
+        <!-- [ARENA] Public lobbies, demoted to the bottom and to a smaller
+             card. They led the page and took 40vh; wagered 1v1 is what this
+             site is for, and these are the secondary option. -->
         ${this.lobbies === null
           ? html`<div
-              class="flex items-center justify-center h-44 sm:h-[min(24rem,40vh)]"
+              class="flex items-center justify-center h-32 sm:h-[min(15rem,28vh)]"
             >
               <span
-                class="w-24 h-24 border-[6px] border-blue-500/30 border-t-blue-500 rounded-full animate-spin"
+                class="w-16 h-16 border-[6px] border-blue-500/30 border-t-blue-500 rounded-full animate-spin"
               ></span>
             </div>`
           : html`<div
-              class="grid grid-cols-1 sm:grid-cols-[2fr_1fr] gap-4 sm:h-[min(24rem,40vh)]"
+              class="grid grid-cols-1 sm:grid-cols-[2fr_1fr] gap-4 sm:h-[min(15rem,28vh)]"
             >
               <!-- Left col: main card (desktop only) -->
               ${ffa
@@ -209,34 +233,6 @@ export class GameModeSelector extends LitElement {
                   : nothing}
               </div>
             </div>`}
-
-        <!-- Solo: full width, desktop only -->
-        <div class="hidden sm:block h-14">
-          ${this.renderSmallActionCard(
-            translateText("main.solo"),
-            this.openSinglePlayerModal,
-            "bg-malibu-blue hover:bg-aquarius active:bg-malibu-blue/80 hover:scale-y-105 hover:scale-x-[1.01]",
-          )}
-        </div>
-        <!-- Bottom row: create + ranked + join (desktop only) -->
-        <div class="hidden sm:grid grid-cols-3 gap-4 h-14">
-          ${this.renderSmallActionCard(
-            translateText("main.create"),
-            this.openHostLobby,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
-          )}
-          ${this.renderSmallActionCard(
-            translateText("mode_selector.ranked_title"),
-            this.openRankedMenu,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
-          )}
-          ${this.renderSmallActionCard(
-            translateText("main.join"),
-            this.openJoinLobby,
-            "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]",
-            this.hostedLobbyCount(),
-          )}
-        </div>
       </div>
     `;
   }
@@ -260,6 +256,19 @@ export class GameModeSelector extends LitElement {
   private openHostLobby = () => {
     if (!this.validateUsername()) return;
     (document.querySelector("host-lobby-modal") as HostLobbyModal)?.open();
+  };
+
+  // [ARENA] A duel is an ordinary two-seat private lobby, so it opens the host
+  // lobby with the seat count preset and locked rather than through a second
+  // screen. Everything a duel needs past that point — the waiting room, the
+  // client list, the start timer, the share link, and the stake gate reached by
+  // re-dispatching join-lobby — already exists there and should have one
+  // implementation.
+  private openDuel = () => {
+    if (!this.validateUsername()) return;
+    (document.querySelector("host-lobby-modal") as HostLobbyModal)?.open({
+      preset: "duel",
+    });
   };
 
   private openJoinLobby = () => {

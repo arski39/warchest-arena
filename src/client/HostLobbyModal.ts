@@ -143,6 +143,12 @@ export class HostLobbyModal extends BaseModal {
   // ARENA_MAX_ENTRY_FEE; the mint is an operator setting and not a host input.
   @state() private wagerTier: number | null = null;
   @state() private wagerMaxPlayers: number = 16;
+  // [ARENA] Opened as a 1v1 duel — the site's primary mode. A duel is an
+  // ordinary two-seat wagered lobby, so this presets the seat count and locks
+  // it rather than being a second kind of lobby. Building a separate duel
+  // screen would mean a second copy of the waiting room, the client list, the
+  // start timer and the share link, all of which already live here.
+  @state() private duelPreset: boolean = false;
   @state() private wagerRequestInFlight: boolean = false;
   @state() private wagerError: string | null = null;
 
@@ -424,7 +430,9 @@ export class HostLobbyModal extends BaseModal {
                     .value=${String(
                       this.wager?.maxPlayers ?? this.wagerMaxPlayers,
                     )}
-                    ?disabled=${attached || this.wagerRequestInFlight}
+                    ?disabled=${attached ||
+                    this.wagerRequestInFlight ||
+                    this.duelPreset}
                     @change=${(e: Event) => {
                       this.wagerMaxPlayers = Number(
                         (e.target as HTMLInputElement).value,
@@ -901,6 +909,15 @@ export class HostLobbyModal extends BaseModal {
     // modal's close() navigating via showPage, which force-closes this one —
     // can re-arm it and disconnect the host mid game-start.
     this.leaveLobbyOnClose = true;
+    // [ARENA] Set before anything can render. BaseModal re-invokes open() with
+    // no args once the page is shown, so this reads `args?.preset` only when
+    // args are actually present and leaves a duel in progress alone otherwise.
+    if (args !== undefined) {
+      this.duelPreset = args.preset === "duel";
+      if (this.duelPreset) {
+        this.wagerMaxPlayers = 2;
+      }
+    }
     this.startLobbyUpdates();
     void getUserMe().then((userMe) => {
       // Dev skips the entitlement gate (matching the server) so the
@@ -1067,6 +1084,10 @@ export class HostLobbyModal extends BaseModal {
     this.compactMap = false;
     this.useRandomMap = false;
     this.disabledUnits = [];
+    // [ARENA] Cleared with the rest of the lobby state, so a plain "Create
+    // Lobby" after a duel is not silently still capped at two seats.
+    this.duelPreset = false;
+    this.wagerMaxPlayers = 16;
     this.lobbyId = "";
     this.clients = [];
     this.lobbyCreatorClientID = "";
@@ -1604,6 +1625,24 @@ export class HostLobbyModal extends BaseModal {
             instantBuild: this.instantBuild,
             randomSpawn: this.randomSpawn,
             gameMode: this.gameMode,
+            // [ARENA] A duel is 1v1, and GameServer enforces this itself —
+            // it refuses a join once playerCount reaches maxPlayers.
+            //
+            // This is belt to the wager's braces, not the primary control. A
+            // *wagered* duel is already 1v1 without it: the escrow is created
+            // with max_players 2, only two wallets can stake, and a third
+            // client is refused by verifyOnchainMembership because it is not
+            // in players[]. This caps the free case, where there is no escrow
+            // to do that.
+            //
+            // Note when it lands: putGameConfig() only reaches the server
+            // through the eventBus, which does not exist until the host's
+            // lobby connection is up, so the cap applies from the first config
+            // push rather than from the instant of creation. Setting it at
+            // create_game would mean sending a whole GameConfig the modal has
+            // not built yet (CreateGameInputSchema takes a complete one or
+            // nothing) — that belongs with the server-created duel lobbies.
+            maxPlayers: this.duelPreset ? 2 : undefined,
             disabledUnits: this.disabledUnits,
             spawnImmunityDuration: this.spawnImmunity
               ? spawnImmunityTicks
