@@ -103,6 +103,18 @@ https://warchest-arena.com {
 # it again and would also send the container's own JWKS fetch out to Cloudflare
 # and back for traffic that never needs to leave the machine.
 https://api.warchest-arena.com {
+	# Explicit, so the intent survives someone re-adding a wildcard later.
+	#
+	# ⚠️ THE ORIGIN CERTIFICATE MUST NOT COVER *.warchest-arena.com.
+	# Caddy matches certificates out of one process-wide cache by SAN, and a
+	# loaded wildcard matches api. -- at which point Caddy logs "skipping
+	# automatic certificate management because one or more matching certificates
+	# are already loaded" and serves the untrusted origin cert here regardless of
+	# this block. There is no per-site scoping and no force_automate in Caddy
+	# 2.11. Issue the Cloudflare origin certificate for the apex and www ONLY.
+	tls {
+		issuer acme
+	}
 	reverse_proxy 127.0.0.1:8787
 }
 
