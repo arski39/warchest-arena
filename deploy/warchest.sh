@@ -37,7 +37,12 @@ GAME_CONTAINER="warchest"
 AUTH_CONTAINER="warchest-auth"
 GAME_PORT="${WARCHEST_GAME_PORT:-8080}"   # host side; nginx listens on 80 inside
 AUTH_PORT_HOST="${WARCHEST_AUTH_PORT:-8787}"
-HEALTH_TIMEOUT_SECS="${WARCHEST_HEALTH_TIMEOUT:-180}"
+# 180 was too tight and failed a deploy that had in fact succeeded. Readiness
+# needs EVERY worker to report in once, and each of the NUM_WORKERS+1 processes
+# runs runWagerPreflight() first -- live Solana RPC round-trips, against an
+# endpoint that rate-limits. The rollback that follows a false negative is far
+# more disruptive than waiting.
+HEALTH_TIMEOUT_SECS="${WARCHEST_HEALTH_TIMEOUT:-420}"
 
 # The container runs node as uid 1000 (supervisord.conf `user=node`). A
 # 600 root-owned key mounts fine and is then unreadable inside, which surfaces
