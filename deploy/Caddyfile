@@ -21,22 +21,30 @@
 #   sudo systemctl reload caddy
 
 {
-	# We supply the certificate, so Caddy must not try to obtain one. It also
-	# must not add its own http->https redirects for the proxied hosts, because
-	# Cloudflare already redirects there and both together is
-	# ERR_TOO_MANY_REDIRECTS. The explicit http:// block below handles the one
-	# host Cloudflare is NOT in front of.
+	# `disable_redirects`, NOT `off`: Caddy must still manage a certificate for
+	# api.warchest-arena.com (see the bottom of this file), and `off` would
+	# disable that too. What it must not do is add its own http->https redirects
+	# for the Cloudflare-proxied hosts, because Cloudflare's "Always Use HTTPS"
+	# already redirects there and both together is ERR_TOO_MANY_REDIRECTS.
 	auto_https disable_redirects
+
+	# Where Let's Encrypt sends expiry warnings for the api. certificate.
+	email admin@warchest-arena.com
 }
 
 (origin_tls) {
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
 }
 
-# Only api. can actually be reached over plain http from outside -- it is
-# DNS-only, so Cloudflare never sees it. The apex and www are listed for the
-# case where someone reaches this box by IP or with Cloudflare bypassed.
-http://warchest-arena.com, http://www.warchest-arena.com, http://api.warchest-arena.com {
+# Plain http. api. is the only host reachable this way from outside (it is
+# DNS-only, so Cloudflare never sees it); the apex and www are here for the case
+# where someone reaches this box by IP or with Cloudflare bypassed.
+#
+# api. is deliberately NOT redirected: Caddy needs port 80 on that host to
+# answer Let's Encrypt's HTTP-01 challenge. Caddy serves the challenge path
+# ahead of site routes, so a redirect here would not actually break issuance --
+# but leaving it out removes the question entirely.
+http://warchest-arena.com, http://www.warchest-arena.com {
 	redir https://{host}{uri} permanent
 }
 
@@ -72,8 +80,22 @@ https://warchest-arena.com {
 # The hostname is not configurable. AuthEnv.issuer(), ServerEnv.jwtIssuer() and
 # ClientEnv.jwtIssuer() each independently COMPUTE https://api.$DOMAIN, and
 # jwtVerify rejects any other issuer. AUTH_PORT changes only the listen port.
+# NOTE the absence of `import origin_tls` here, which is the whole point.
+#
+# A Cloudflare ORIGIN certificate is trusted by Cloudflare and by nothing else.
+# The apex gets away with it because Cloudflare proxies it and presents its own
+# Universal SSL to the browser -- the origin cert is only ever seen by
+# Cloudflare. api. is DNS-only, so browsers AND the game container connect here
+# directly and see whatever this block serves. Serving the origin cert there
+# fails with SEC_E_UNTRUSTED_ROOT / UNABLE_TO_VERIFY_LEAF_SIGNATURE, and auth
+# stops working entirely: no login in the browser, and no JWKS fetch server-side.
+#
+# So this host gets a real Let's Encrypt certificate, which Caddy obtains and
+# renews by itself over HTTP-01 on port 80. That works precisely BECAUSE api. is
+# grey-clouded: nothing intercepts the challenge. Proxying this host would break
+# it again and would also send the container's own JWKS fetch out to Cloudflare
+# and back for traffic that never needs to leave the machine.
 https://api.warchest-arena.com {
-	import origin_tls
 	reverse_proxy 127.0.0.1:8787
 }
 
