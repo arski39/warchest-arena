@@ -917,11 +917,28 @@ export async function startWorker() {
               });
             }
             if (!check.isMember) {
-              log.warn("On-chain entry fee not confirmed", {
-                persistentID: persistentId,
-                gameID: clientMsg.gameID,
-              });
-              ws.close(1002, "Unauthorized: entry fee not confirmed on-chain");
+              // [ARENA] Distinguish "we could not check" from "you did not
+              // pay". Both refuse the join -- admitting an unverified wallet
+              // into a wagered match is never acceptable -- but telling a
+              // player who did stake that their fee was not confirmed sends
+              // them looking for a problem with their own transaction.
+              const unreachable = check.failure === "rpc-unavailable";
+              log.warn(
+                unreachable
+                  ? "Could not reach the RPC to confirm the entry fee"
+                  : "On-chain entry fee not confirmed",
+                {
+                  persistentID: persistentId,
+                  gameID: clientMsg.gameID,
+                  failure: check.failure,
+                },
+              );
+              ws.close(
+                1002,
+                unreachable
+                  ? "Could not verify your stake right now — please retry"
+                  : "Unauthorized: entry fee not confirmed on-chain",
+              );
               return;
             }
           }
