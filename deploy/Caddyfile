@@ -1,15 +1,22 @@
 # [ARENA] Caddy config for the fork. Install to /etc/caddy/Caddyfile.
 #
-# Serves a Cloudflare ORIGIN CERTIFICATE rather than doing ACME. That is a
-# deliberate choice, not a workaround:
+# TWO different certificates, and which host gets which is not a preference:
 #
-#   - the apex and www are Cloudflare-PROXIED, so Cloudflare's "Always Use
-#     HTTPS" and Universal SSL already handle the public-facing half, and an
-#     ACME HTTP-01 challenge would have to fight both
-#   - the origin cert is valid 15 years and covers warchest-arena.com AND
-#     *.warchest-arena.com, so the grey-clouded api. host is covered too
-#   - the accepted cost: an origin cert is trusted ONLY by Cloudflare. Leaving
-#     Cloudflare means getting a real certificate first.
+#   apex + www  -> the Cloudflare ORIGIN certificate. They are Cloudflare-
+#                  PROXIED, so the browser is served Cloudflare's own Universal
+#                  SSL and this certificate is seen only by Cloudflare. Valid 15
+#                  years, no renewal, and no ACME challenge to fight "Always Use
+#                  HTTPS" over.
+#
+#   api.        -> a real LET'S ENCRYPT certificate, obtained and renewed by
+#                  Caddy. It is DNS-only, so browsers and the game container
+#                  reach it DIRECTLY -- and an origin certificate is trusted by
+#                  Cloudflare and by nothing else, so serving it here fails with
+#                  SEC_E_UNTRUSTED_ROOT and auth stops working entirely.
+#
+# Getting this backwards is not subtle in effect but is very easy to do, because
+# the origin certificate's SANs cover *.warchest-arena.com and therefore LOOK
+# sufficient for api. Coverage is not the issue; trust is.
 #
 # Cloudflare's SSL/TLS mode must be **Full (strict)**. Flexible sends plaintext
 # to this box, which breaks the auth refresh cookie's Secure attribute; plain
