@@ -72,6 +72,23 @@ export async function tempTokenLogin(token: string): Promise<string | null> {
   return email;
 }
 
+// [ARENA] Adopt a session minted by an exchange endpoint — today only
+// `/auth/wallet`, via `arena/walletLogin.ts`.
+//
+// The module-level token is deliberately not exported, so this is the one seam
+// through which another module can install a session, and it sets the expiry
+// alongside the token. Setting one without the other is how you get a session
+// that either never refreshes or refreshes on every call.
+//
+// This is the same assignment `doRefreshJwt()` makes for the guest path; the
+// refresh cookie the exchange set is what makes the new identity survive a
+// reload, and it is a *wallet* refresh cookie, so the session comes back as a
+// wallet session rather than silently reverting to a guest.
+export function adoptSession(jwt: string, expiresIn: number): void {
+  __jwt = jwt;
+  __expiresAt = Date.now() + expiresIn * 1000;
+}
+
 export async function getAuthHeader(): Promise<string> {
   const userAuthResult = await userAuth();
   if (!userAuthResult) return "";

@@ -65,6 +65,24 @@ export function getConnectedWallet(): WalletAdapter | null {
   return _connected;
 }
 
+/**
+ * base64 of raw bytes, without pulling in a Buffer polyfill. `Buffer` is a Node
+ * global and is simply undefined in the browser, so the obvious
+ * `Buffer.from(sig).toString("base64")` type-checks (via @types/node) and then
+ * throws at runtime. btoa needs a binary string, hence the per-byte map.
+ *
+ * Lives here because both things that sign with a wallet need it — the
+ * per-match binding in `walletAuth.ts` and the login exchange in
+ * `walletLogin.ts` — and the two must not import each other. They prove
+ * different claims with deliberately different message prefixes, and a shared
+ * encoder is the only thing they should have in common.
+ */
+export function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 /** Call once at app startup — auto-reconnects if user previously authorized. */
 export function mountWalletProvider(): void {
   const provider = getPhantom();

@@ -124,11 +124,12 @@ describe("AccountModal — rendering", () => {
     const steamHeader = modal.querySelector("steam-user-header");
     expect(steamHeader).toBeTruthy();
 
-    // No login CTAs (Discord/Google login buttons, email field) — those only
-    // render on the logged-out `renderLoginOptions()` screen.
+    // No login CTA — that only renders on the logged-out
+    // `renderLoginOptions()` screen. [ARENA] The marker used to be the
+    // Discord/Google buttons; wallet login replaced them, because this fork's
+    // auth service has no OAuth backend and those buttons 404'd.
     const text = modal.textContent ?? "";
-    expect(text).not.toContain("main.login_discord");
-    expect(text).not.toContain("main.login_google");
+    expect(text).not.toContain("account_modal.wallet_login");
 
     // No Google-link CTA either — Steam is primary in v1, no linking UI.
     expect(text).not.toContain("account_modal.link_google");
@@ -179,7 +180,7 @@ describe("AccountModal — rendering", () => {
 
     // Logged out, so the login options screen is what renders.
     const text = modal.textContent ?? "";
-    expect(text).toContain("main.login_google");
+    expect(text).toContain("account_modal.wallet_login");
     expect(text).toContain("account_modal.login_email_exists");
   });
 
@@ -188,7 +189,7 @@ describe("AccountModal — rendering", () => {
     await flushOpen();
 
     const text = modal.textContent ?? "";
-    expect(text).toContain("main.login_google");
+    expect(text).toContain("account_modal.wallet_login");
     expect(text).not.toContain("account_modal.login_email_exists");
   });
 

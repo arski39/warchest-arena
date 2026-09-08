@@ -3,6 +3,7 @@ import { ClientEnv } from "../ClientEnv";
 import {
   connectWallet,
   getConnectedWallet,
+  toBase64,
   type WalletAdapter,
 } from "./WalletProvider";
 
@@ -29,18 +30,6 @@ function extractJti(token: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * base64 of raw bytes, without pulling in a Buffer polyfill. `Buffer` is a Node
- * global and is simply undefined in the browser, so the obvious
- * `Buffer.from(sig).toString("base64")` type-checks (via @types/node) and then
- * throws at runtime. btoa needs a binary string, hence the per-byte map.
- */
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
 }
 
 /**

@@ -99,15 +99,41 @@ var sits in `docker inspect`, in the deploy env file, in `ps`, and in any crash
 dump that prints the environment. Before mainnet, move it off the box that holds
 the arena authority key: one compromise should not be both.
 
-### Wallet login is server-side only, for now
+### Wallet login is the sign-in
 
-`/auth/wallet` has no browser half yet. The arena verifies wallet ownership per
-match on its own (`server/arena/auth.ts`), so nobody needs wallet login to
-stake, and a sign-in entry point would change a player's persistentID
-mid-session. The message a wallet signs to log in uses a **different prefix**
-from the per-match one (`core/arena/authMessage.ts`) so the two signatures can
-never be interchanged; `tests/server/AuthService.test.ts` asserts that a
-per-match signature is refused as a login.
+`client/arena/walletLogin.ts` is the browser half of `/auth/wallet`, and the
+account modal's sign-in screen is the entry point. It replaced the inherited
+Discord, Google and email buttons, all three of which navigated to endpoints
+this service returns 404 for — it replaces only the JWT half of upstream's
+closed API and has no OAuth backend to offer.
+
+The message a wallet signs to log in uses a **different prefix** from the
+per-match one (`core/arena/authMessage.ts`) so the two signatures can never be
+interchanged. `tests/server/AuthService.test.ts` asserts that a per-match
+signature is refused as a login; `tests/client/ArenaWalletLogin.test.ts` asserts
+the client never produces one, verifying against this service's own verifier
+rather than a copy of it. **Do not unify the prefixes.**
+
+**Login is menu-only, and that is the whole answer to the objection that used to
+block it.** Signing in swaps `sub`, hence the persistentID, hence any
+`walletRegistry` binding and any in-flight `jti`-bound match signature. Rather
+than reconciling that, `walletLogin()` refuses outright while
+`document.body.classList` has `in-game` or the `.arena-wager-overlay` stake
+prompt is open — at the menu there is nothing bound yet, so there is nothing to
+reconcile. It reads the DOM rather than importing from `Main.ts`, which owns the
+game lifecycle and would be a cycle.
+
+Success reloads the page, like logout does: the identity has changed and every
+cached view of it — `/users/@me`, the nav button, cosmetics — belongs to the
+guest who no longer exists.
+
+**Staking still does not require logging in.** The arena verifies wallet
+ownership per match on its own (`server/arena/auth.ts`), so the guest path is
+untouched and free play stays zero-click.
+
+`/users/@me` deliberately still reports `user: {}` — see `userMe.ts`. The wallet
+is not surfaced there because every consumer of that block would then offer
+account management this fork has no backend for.
 
 ### Local development
 

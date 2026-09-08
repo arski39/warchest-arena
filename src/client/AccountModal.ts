@@ -12,8 +12,6 @@ import {
   setMarketingConsent,
 } from "./Api";
 import {
-  discordLogin,
-  googleLogin,
   linkGoogle,
   logOut,
   reauthAfterCrazyGamesChange,
@@ -54,6 +52,11 @@ export class AccountModal extends BaseModal {
   // One-shot outcome of a rejected sign-in, read from the `login=` router
   // arg on open. Reassigned on every open, so reopening clears it.
   @state() private loginError: LoginResult | undefined;
+  // [ARENA] Wallet sign-in. The error is a rendered string rather than a code
+  // because walletLogin() already distinguishes the cases it can act on; this
+  // only has to show one of them.
+  @state() private walletLoginInFlight: boolean = false;
+  @state() private walletLoginError: string | null = null;
 
   private userMeResponse: UserMeResponse | null = null;
   private statsTree: PlayerStatsTree | null = null;
@@ -730,51 +733,32 @@ export class AccountModal extends BaseModal {
           ${this.renderLoginError()}
 
           <div class="space-y-6">
-            <!-- Discord Login Button -->
+            <!-- [ARENA] The wallet is the only identity this fork can actually
+                 issue. Upstream's Discord, Google and email buttons stood here
+                 and all three navigate to endpoints this fork's auth service
+                 returns 404 for — it replaces only the JWT half of upstream's
+                 closed API, and has no OAuth backend to replace the rest with.
+                 A sign-in screen offering three things that cannot work is
+                 worse than one offering the thing that does. -->
             <button
-              @click="${this.handleDiscordLogin}"
-              class="w-full px-6 py-4 text-white bg-[#5865F2] hover:bg-[#4752C4] border border-transparent rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#5865F2] transition-colors duration-200 flex items-center justify-center gap-3 group relative overflow-hidden shadow-lg hover:shadow-[#5865F2]/20"
+              @click="${this.handleWalletLogin}"
+              ?disabled=${this.walletLoginInFlight}
+              class="w-full px-6 py-4 text-white bg-malibu-blue hover:bg-aquarius disabled:opacity-50 disabled:cursor-not-allowed border border-transparent rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-malibu-blue transition-colors duration-200 flex items-center justify-center gap-3 shadow-lg"
             >
-              <img
-                src=${assetUrl("images/DiscordLogo.svg")}
-                alt="Discord"
-                class="w-6 h-6 relative z-10"
-              />
-              <span class="font-bold relative z-10 tracking-wide"
-                >${translateText("main.login_discord") ||
-                translateText("account_modal.link_discord")}</span
+              <span class="font-bold tracking-wide"
+                >${this.walletLoginInFlight
+                  ? translateText("account_modal.wallet_connecting")
+                  : translateText("account_modal.wallet_login")}</span
               >
             </button>
-
-            <!-- Google Login Button (Google brand guidelines: white surface,
-                 dark text, the multicolor "G" mark) -->
-            <button
-              @click="${this.handleGoogleLogin}"
-              class="w-full px-6 py-4 text-[#1f1f1f] bg-white hover:bg-[#f7f8f8] border border-[#dadce0] rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#4285F4] transition-colors duration-200 flex items-center justify-center gap-3 group relative overflow-hidden shadow-lg"
-            >
-              <img
-                src=${assetUrl("images/GoogleLogo.svg")}
-                alt=${translateText("account_modal.google_alt")}
-                class="w-6 h-6 relative z-10"
-              />
-              <span class="font-bold relative z-10 tracking-wide"
-                >${translateText("main.login_google")}</span
-              >
-            </button>
-
-            <!-- Divider -->
-            <div class="flex items-center gap-4 py-2">
-              <div class="h-px bg-white/10 flex-1"></div>
-              <span
-                class="text-[10px] uppercase tracking-widest text-white/30 font-bold"
-              >
-                ${translateText("account_modal.or")}
-              </span>
-              <div class="h-px bg-white/10 flex-1"></div>
-            </div>
-
-            <!-- Email Recovery -->
-            <div class="space-y-3">${this.renderEmailField()}</div>
+            <p class="text-white/40 text-xs text-center leading-relaxed">
+              ${translateText("account_modal.wallet_login_desc")}
+            </p>
+            ${this.walletLoginError !== null
+              ? html`<p class="text-red-400 text-xs text-center">
+                  ${this.walletLoginError}
+                </p>`
+              : nothing}
           </div>
 
           <div class="mt-8 text-center border-t border-white/10 pt-6">
@@ -827,13 +811,48 @@ export class AccountModal extends BaseModal {
     this.requestUpdate();
   }
 
-  private handleDiscordLogin() {
-    discordLogin();
-  }
-
-  private handleGoogleLogin() {
-    googleLogin();
-  }
+  // [ARENA] Signs in with a Solana wallet: connect, sign the service's
+  // challenge, exchange it for a session. Replaces handleDiscordLogin and
+  // handleGoogleLogin, which navigated to endpoints this fork returns 404 for.
+  //
+  // Reloads on success for the same reason handleLogout does: the session's
+  // identity has changed, and every cached view of it — /users/@me, the nav
+  // button, cosmetics — is now the previous player's. Reloading is blunt but it
+  // cannot leave half the UI describing a guest who no longer exists.
+  private handleWalletLogin = async (): Promise<void> => {
+    if (this.walletLoginInFlight) return;
+    this.walletLoginInFlight = true;
+    this.walletLoginError = null;
+    try {
+      // Imported lazily so the sign-in screen does not put the wallet path in
+      // front of every player who never opens this modal.
+      const { walletLogin } = await import("./arena/walletLogin");
+      await walletLogin();
+      this.close();
+      window.location.reload();
+    } catch (e) {
+      const reason =
+        e instanceof Error && e.name === "WalletLoginError"
+          ? (e as { reason?: string }).reason
+          : undefined;
+      if (reason === "rejected") {
+        // They changed their mind at the wallet prompt. Not a fault, and not
+        // worth an error message.
+        this.walletLoginError = null;
+      } else if (reason === "no-wallet") {
+        this.walletLoginError = translateText(
+          "account_modal.wallet_no_extension",
+        );
+      } else {
+        this.walletLoginError =
+          e instanceof Error
+            ? e.message
+            : translateText("account_modal.wallet_login_failed");
+      }
+    } finally {
+      this.walletLoginInFlight = false;
+    }
+  };
 
   private async handleLinkGoogle(): Promise<void> {
     // On success linkGoogle navigates to Google; the result comes back as a

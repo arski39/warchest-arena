@@ -22,7 +22,6 @@
     "games_username": "Username",
     "get_magic_link": "Get Magic Link",
     "google_alt": "Google",
-    "link_discord": "Link Discord Account",
     "link_google": "Link Google Account",
     "link_google_already_linked": "That Google account is already linked to another player.",
     "link_google_error": "Couldn't link your Google account. Please make sure you're signed in and try again.",
@@ -84,6 +83,11 @@
     "username_temporary_prompt": "Your username was taken by another player. Choose a new one now? The rename is free.",
     "username_temporary_prompt_confirm": "Choose a name",
     "username_title": "Username",
+    "wallet_connecting": "Check your wallet…",
+    "wallet_login": "Connect wallet",
+    "wallet_login_desc": "Sign a message with your Solana wallet. No email, no password, nothing stored — the same wallet is the same player everywhere.",
+    "wallet_login_failed": "Could not sign you in. Try again.",
+    "wallet_no_extension": "No Solana wallet found. Install Phantom (phantom.app) to sign in.",
     "your_subscription": "Your Subscription"
   },
   "build_menu": {
@@ -998,8 +1002,6 @@
     "help": "Help",
     "join": "Join Lobby",
     "leaderboard": "Leaderboard",
-    "login_discord": "Login with Discord",
-    "login_google": "Login with Google",
     "menu": "Menu",
     "news": "News",
     "play": "Play",

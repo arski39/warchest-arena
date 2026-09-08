@@ -43,7 +43,16 @@ function setEnv(gameEnv: "dev" | "prod", arenaDevBypass = false) {
 /** Stands in for the injected wallet: signs with a throwaway ed25519 key. */
 function mockWallet() {
   const kp = nacl.sign.keyPair();
-  vi.doMock("../src/client/arena/WalletProvider", () => ({
+  vi.doMock("../src/client/arena/WalletProvider", async () => ({
+    // [ARENA] The real encoder. It moved here from walletAuth.ts when wallet
+    // login needed it too, and it is what turns the signature into the string
+    // the server parses — stubbing it would skip the encoding these assertions
+    // run through.
+    toBase64: (
+      await vi.importActual<
+        typeof import("../src/client/arena/WalletProvider")
+      >("../src/client/arena/WalletProvider")
+    ).toBase64,
     getConnectedWallet: () => ({
       publicKey: "unused-in-these-assertions",
       // Uint8Array.from: jsdom's TextEncoder returns an array from another
