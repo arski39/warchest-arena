@@ -295,9 +295,25 @@ ok "started"
 say "Waiting for health (up to ${HEALTH_TIMEOUT_SECS}s)"
 deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SECS ))
 healthy=0
+# The body is captured, NOT piped into grep.
+#
+# `curl ... | grep -q` cannot work under `set -o pipefail`: grep -q exits the
+# moment it matches, curl then dies of SIGPIPE, and pipefail reports the whole
+# pipeline as failed. The gate could never pass on a response bigger than a pipe
+# buffer -- so it failed two deploys that had in fact succeeded, which is
+# precisely the failure mode this gate exists to prevent.
+serves_markup() {
+    local body
+    body="$(curl -fsS --max-time 10 "http://127.0.0.1:${GAME_PORT}/" 2>/dev/null)" || return 1
+    case "$body" in
+        *'<html'*|*'<HTML'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if curl -fsS --max-time 5 "http://127.0.0.1:${GAME_PORT}/api/health" >/dev/null 2>&1 \
-       && curl -fsS --max-time 10 "http://127.0.0.1:${GAME_PORT}/" 2>/dev/null | grep -qi '<html'; then
+       && serves_markup; then
         healthy=1
         break
     fi
@@ -347,7 +363,10 @@ if [ "$WAGERING" = 1 ]; then
     fi
     ok "sweeper running (master only)"
 
-    if docker logs "$GAME_CONTAINER" 2>&1 | grep -q 'arena/devBypass'; then
+    # grep -c, not grep -q: under pipefail a matching `grep -q` closes the pipe,
+    # `docker logs` dies of SIGPIPE, and the pipeline reports failure -- so this
+    # check would have silently passed EXACTLY when a dev bypass was present.
+    if [ "$(docker logs "$GAME_CONTAINER" 2>&1 | grep -c 'arena/devBypass' || true)" -gt 0 ]; then
         die "ARENA_DEV_BYPASS resolved as ENABLED. Refusing to leave this deployed."
     fi
     ok "no dev bypass"
