@@ -584,6 +584,76 @@ export class HostLobbyModal extends BaseModal {
     void this.handlePublicListingToggle(isPublic);
   }
 
+  // [ARENA] The duel waiting room: what you staked, who is here, and a way to
+  // start once both have. No configuration, because there is none to make.
+  private renderDuelWaitingRoom(
+    statusLabel: string,
+    secondsRemaining: number | null,
+  ) {
+    const wager = this.wager;
+    const stake =
+      wager !== null
+        ? formatStake(BigInt(wager.entryFee), wager.decimals, wager.symbol)
+        : null;
+    const pot =
+      wager !== null
+        ? formatStake(BigInt(wager.entryFee) * 2n, wager.decimals, wager.symbol)
+        : null;
+
+    return html`
+      <div class="custom-scrollbar p-6 flex flex-col gap-6">
+        ${stake !== null
+          ? html`<div class="text-center">
+              <p class="text-white/50 text-xs uppercase tracking-widest">
+                ${translateText("duel.your_stake")}
+              </p>
+              <p class="text-white text-3xl font-bold mt-1">${stake}</p>
+              <p class="text-white/40 text-xs mt-2">
+                ${translateText("duel.pot_is", { pot: pot ?? "" })}
+              </p>
+            </div>`
+          : html`<p class="text-center text-white/50 text-sm">
+              ${translateText("duel.no_escrow")}
+            </p>`}
+
+        <div class="rounded-xl bg-black/30 border border-white/10 p-4">
+          <p class="text-white/50 text-xs uppercase tracking-widest mb-3">
+            ${translateText("duel.players", {
+              count: this.clients.length,
+            })}
+          </p>
+          ${this.clients.length === 0
+            ? html`<p class="text-white/30 text-sm">—</p>`
+            : html`<ul class="flex flex-col gap-1">
+                ${this.clients.map(
+                  (c) =>
+                    html`<li class="text-white text-sm">${c.username}</li>`,
+                )}
+              </ul>`}
+        </div>
+
+        <p class="text-white/40 text-xs text-center leading-relaxed">
+          ${translateText("duel.fixed_settings")}
+        </p>
+
+        ${this.wagerError !== null
+          ? html`<p class="text-amber-300 text-xs text-center">
+              ${this.wagerError}
+            </p>`
+          : nothing}
+
+        <o-button
+          variant=${secondsRemaining !== null ? "warning" : "primary"}
+          width="block"
+          size="lg"
+          .title=${statusLabel}
+          ?disable=${this.lobbyStartAt === null && this.clients.length < 2}
+          @click=${this.toggleGameStartTimer}
+        ></o-button>
+      </div>
+    `;
+  }
+
   protected renderBody() {
     const secondsRemaining =
       this.lobbyStartAt !== null
@@ -600,6 +670,15 @@ export class HostLobbyModal extends BaseModal {
         : translateText("host_modal.starting_in", {
             time: renderDuration(secondsRemaining),
           });
+
+    // [ARENA] A duel has no settings to show. Everything below this point is
+    // the host configuration screen — maps, bots, modifiers, timers — and a
+    // matchmade 1v1 must not offer any of it. Returning early is deliberate
+    // rather than hiding a dozen sections individually: a section added later
+    // is then absent from the duel by default, which is the safe direction.
+    if (this.duelPreset) {
+      return this.renderDuelWaitingRoom(statusLabel, secondsRemaining);
+    }
 
     const inputCards = [
       html`<toggle-input-card
@@ -953,6 +1032,17 @@ export class HostLobbyModal extends BaseModal {
         this.wagerMaxPlayers = 2;
         this.duelTier = typeof args.tier === "number" ? args.tier : null;
         this.duelShouldList = args.list === true;
+        // [ARENA] A duel is played on a random map and its host configures
+        // nothing — two people staking the same amount should get the same
+        // game, not whatever the one who clicked first felt like.
+        //
+        // Set directly rather than through handleSelectRandomMap(), which
+        // pushes the config immediately: putGameConfig() reaches the server
+        // through the eventBus, which does not exist until the host's
+        // connection is up. toggleGameStartTimer() awaits putGameConfig()
+        // before starting, so this lands before the match either way.
+        this.useRandomMap = true;
+        this.selectedMap = getRandomMapType();
       }
     }
     this.startLobbyUpdates();

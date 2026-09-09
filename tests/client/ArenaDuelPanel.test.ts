@@ -163,6 +163,27 @@ describe("[ARENA] duel matchmaking", () => {
     expect(hostOpened).toEqual([]);
   });
 
+  it("counts who is waiting at each stake, from the same data it matches on", async () => {
+    // The count and the behaviour must come from one source: if the picker says
+    // one player is waiting at 5, pressing Find must join them. Two independent
+    // reads is how a "1 waiting" that matches nobody happens.
+    broadcast(
+      lobbies(
+        duelLobby({ gameID: "waiting5a", tier: 5 }),
+        duelLobby({ gameID: "waiting5b", tier: 5 }),
+        duelLobby({ gameID: "waiting1a", tier: 1 }),
+        // Started duels leave the list, and a 16-seat pot is not a duel.
+        duelLobby({ gameID: "bigpotlob", tier: 5, maxPlayers: 16 }),
+      ),
+    );
+    await panel.updateComplete;
+
+    const p = panel as unknown as { waitingAt: (t: number) => number };
+    expect(p.waitingAt(5)).toBe(2);
+    expect(p.waitingAt(1)).toBe(1);
+    expect(p.waitingAt(25)).toBe(0);
+  });
+
   it("prefers joining over creating when both are possible", async () => {
     // Two players pressing Find at the same tier must converge rather than each
     // creating a lobby and waiting in it. Preferring an existing lobby is what
