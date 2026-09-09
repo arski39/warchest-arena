@@ -1041,6 +1041,21 @@ class Client {
 
     document.body.classList.remove("in-game");
 
+    // [ARENA] The host modal has to close too, and it never did -- only
+    // joinModal was handled here. So a server-side cancellation while the host
+    // sat in the create-lobby screen stopped the transport above and then left
+    // the modal on screen showing whatever it last heard: the countdown frozen
+    // at its final value, and a start/cancel button dispatching into a
+    // lobbyHandle that is now null. An unfilled duel is exactly that case --
+    // it is cancelled BY THE SERVER, not by the host, which is why no other
+    // lobby type had surfaced this.
+    //
+    // closeWithoutLeaving(), not close(): stop(true) has already run, and
+    // close() would re-arm leaveLobbyOnClose and try to leave a dead lobby.
+    if (this.hostModal.isOpen()) {
+      this.hostModal.closeWithoutLeaving();
+    }
+
     if (this.joinModal.isOpen()) {
       this.joinModal.close();
       if (event?.detail.cause === "full-lobby") {

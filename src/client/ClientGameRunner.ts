@@ -291,7 +291,12 @@ export function joinLobby(
         window.dispatchEvent(
           new CustomEvent("show-message", {
             detail: {
-              message: translateText("kick_reason.wager_not_full"),
+              // [ARENA] Not kick_reason.wager_not_full: that string explains
+              // why a lobby cannot start and is the right answer when the host
+              // presses start too early (the branch above). Here the server has
+              // already cancelled and refunded, so the player needs to be told
+              // their stake is back -- the one fact they cannot see from the UI.
+              message: translateText("kick_reason.wager_cancelled_refunded"),
               color: "red",
               duration: 8000,
             },

@@ -647,18 +647,74 @@ export class HostLobbyModal extends BaseModal {
               ${this.wagerError}
             </p>`
           : nothing}
-
-        <o-button
-          variant=${secondsRemaining !== null ? "warning" : "primary"}
-          width="block"
-          size="lg"
-          .title=${statusLabel}
-          ?disable=${this.lobbyStartAt === null && this.clients.length < 2}
-          @click=${this.toggleGameStartTimer}
-        ></o-button>
+        ${this.renderDuelAction(statusLabel, secondsRemaining)}
       </div>
     `;
   }
+
+  // [ARENA] What a duel host can actually do, which is not what the shared
+  // host-lobby button offered.
+  //
+  // While the duel is unfilled it CANNOT be started -- toggle_game_start_timer
+  // is refused by the wager start-gate, because join_match only flips the
+  // escrow to InProgress once the last seat is staked and settle_match accepts
+  // nothing else. So "Start Game" was an unreachable action.
+  //
+  // Worse, the countdown a listed duel eventually shows is not a countdown to
+  // a match at all: maybeAutoStartListed() arms it 5 minutes after listing, and
+  // when it expires cancelUnfilledWageredMatch() cancels the lobby and refunds.
+  // Labelling that "Starting in 0s. Click to cancel" told the player the
+  // opposite of what was about to happen -- and the cancel could not work
+  // either, because maybeAutoStartListed() only skips a lobby whose startsAt is
+  // already set, so a manual disarm is re-armed on the very next tick one
+  // second later. A permanently inert button.
+  //
+  // So: say what the deadline really is, and offer the one thing that does
+  // work. Leaving the lobby routes through end()'s not-started branch, which is
+  // the single refund site -- no second refund path, per the lifecycle rules.
+  private renderDuelAction(
+    statusLabel: string,
+    secondsRemaining: number | null,
+  ) {
+    const filled = this.clients.length >= 2;
+
+    if (!filled) {
+      return html`
+        <p class="text-white/60 text-sm text-center">
+          ${secondsRemaining !== null
+            ? translateText("duel.cancelling_in", {
+                time: renderDuration(secondsRemaining),
+              })
+            : translateText("duel.waiting_opponent")}
+        </p>
+        <o-button
+          variant="secondary"
+          width="block"
+          size="lg"
+          .title=${translateText("duel.cancel_and_refund")}
+          @click=${this.cancelDuel}
+        ></o-button>
+      `;
+    }
+
+    return html`
+      <o-button
+        variant=${secondsRemaining !== null ? "warning" : "primary"}
+        width="block"
+        size="lg"
+        .title=${statusLabel}
+        @click=${this.toggleGameStartTimer}
+      ></o-button>
+    `;
+  }
+
+  // Leaving is the refund: end()'s not-started branch calls
+  // refundWageredLobby(), which reads the escrow and cancel_match'es it when the
+  // chain still says Open.
+  private cancelDuel = () => {
+    this.leaveLobbyOnClose = true;
+    this.close();
+  };
 
   protected renderBody() {
     const secondsRemaining =
