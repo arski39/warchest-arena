@@ -43,6 +43,8 @@ export class InsufficientCurrencyDialog extends LitElement {
       @confirm=${() => {
         this.close();
         // Home path (not just hash) so it also works from in-game (win modal).
+        // [ARENA] #modal=store no longer resolves -- the storefront was removed and ModalRouter strips an unregistered modal name silently. Left in place because this branch is unreachable on this deployment:
+        // nothing is purchasable (/cosmetics.json serves an empty catalogue).
         window.location.href = "/#modal=store&tab=packs";
       }}
     ></confirm-dialog>`;

@@ -125,17 +125,18 @@ export class UsernameInput extends LitElement {
       window.location.hash = "modal=account";
       return;
     }
-    const goStore = await showInGameConfirm(
-      translateText("username.verified_sub_required"),
-      {
-        heading: translateText("username.verified_heading"),
-        variant: "warning",
-        confirmText: translateText("username.verified_sub_required_confirm"),
-      },
-    );
-    if (goStore) {
-      window.location.hash = "modal=store&tab=subscriptions";
-    }
+    // [ARENA] Was a confirm whose action navigated to #modal=store. The
+    // storefront is gone and ModalRouter silently strips an unregistered
+    // modal name, so the button would have become a no-op -- and this dialog
+    // is two clicks from the homepage (buildUserMe never sets
+    // usernameStatus, so the branch above never fires). Acknowledge-only
+    // instead of a button that appears to offer something.
+    await showInGameConfirm(translateText("username.verified_sub_required"), {
+      heading: translateText("username.verified_heading"),
+      variant: "warning",
+      buttons: "confirmOnly",
+      confirmText: translateText("common.close"),
+    });
   }
 
   public getUsername(): string {

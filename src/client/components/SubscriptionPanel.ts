@@ -37,6 +37,8 @@ export class SubscriptionPanel extends LitElement {
   };
 
   private handleChangeTier = (): void => {
+    // [ARENA] #modal=store no longer resolves -- the storefront was removed and ModalRouter strips an unregistered modal name silently. Left in place because this branch is unreachable on this deployment:
+    // it renders only when player.subscription is set, and userMe.ts returns null.
     window.location.hash = "modal=store&tab=subscriptions";
   };
 

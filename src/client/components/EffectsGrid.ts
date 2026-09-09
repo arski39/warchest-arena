@@ -16,7 +16,6 @@ import {
   UserSettings,
 } from "../../core/game/UserSettings";
 import {
-  purchaseCosmetic,
   resolveCosmetics,
   ResolvedCosmetic,
   translateCosmetic,
@@ -37,24 +36,26 @@ function noneTile(effectType: EffectType): ResolvedCosmetic {
 }
 
 /**
- * Renders effect cosmetics grouped by effectType, one sub-header per type.
- * Shared by the home selection modal and the Store's Effects tab.
+ * Renders effect cosmetics grouped by effectType, one sub-header per type:
+ * owned effects plus a Default tile, and clicking persists the selection to
+ * UserSettings.
  *
- * - mode="select": owned effects + a Default tile per type; clicking persists
- *   the selection to UserSettings and re-renders.
- * - mode="purchase": purchasable effects per type with the buy flow.
+ * [ARENA] There used to be a `mode` prop selecting between this and a
+ * purchase grid for the Store's Effects tab. The storefront is gone, its only
+ * consumer with it, so the prop went too rather than being left as a union
+ * with one member -- and with it `affiliateCode`, whose only source was the
+ * store's `#affiliate=` deep link.
+ *
  * - effectType (optional): render only that one effectType and drop the
  *   sub-header (an outer tab already labels it). Unset = all types stacked.
  * - tabbed: render an internal tab bar (one tab per effectType) and show one
- *   type at a time. Used by the Store, whose own top-level tabs can't nest.
+ *   type at a time.
  */
 @customElement("effects-grid")
 export class EffectsGrid extends LitElement {
   @property({ attribute: false }) cosmetics: Cosmetics | null = null;
   @property({ attribute: false }) userMeResponse: UserMeResponse | false =
     false;
-  @property({ type: String }) mode: "select" | "purchase" = "select";
-  @property({ attribute: false }) affiliateCode: string | null = null;
   @property({ type: String }) search = "";
   // When set, render only this effectType and drop the sub-header.
   @property({ type: String }) effectType: EffectType | null = null;
@@ -125,21 +126,12 @@ export class EffectsGrid extends LitElement {
         r.effectType === effectType &&
         this.matchesSearch(r),
     );
-    if (this.mode === "purchase") {
-      return ofType.filter((r) => r.relationship === "purchasable");
-    }
     const owned = ofType.filter((r) => r.relationship === "owned");
     // The Default tile has no name to match — hide it while searching.
     return this.search.trim() ? owned : [noneTile(effectType), ...owned];
   }
 
   private renderTile(slot: string, r: ResolvedCosmetic): TemplateResult {
-    if (this.mode === "purchase") {
-      return html`<cosmetic-button
-        .resolved=${r}
-        .onPurchase=${purchaseCosmetic}
-      ></cosmetic-button>`;
-    }
     const name = (r.cosmetic as Effect | null)?.name ?? null;
     const selected = this.userSettings.getSelectedEffectName(slot);
     const isSelected =
@@ -202,11 +194,7 @@ export class EffectsGrid extends LitElement {
   }
 
   render() {
-    const all = resolveCosmetics(
-      this.cosmetics,
-      this.userMeResponse,
-      this.affiliateCode,
-    );
+    const all = resolveCosmetics(this.cosmetics, this.userMeResponse, null);
     // The active single type: the tab's selection (tabbed) or the effectType
     // prop; null = all types stacked with sub-headers.
     const activeType = this.tabbed ? this.activeType : this.effectType;

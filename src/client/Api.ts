@@ -323,6 +323,12 @@ export async function updateUsername(
 // GET /users/@me/tribe_names — the player's purchased custom tribe names plus
 // the current purchase price. Auth required; returns false when logged out or
 // on any error (callers show a login/empty state rather than a hard failure).
+// [ARENA] The four tribe functions below, and fetchTribeStats further down,
+// have had no caller since the storefront was removed -- TribesPanel.ts and
+// TribeStatsView.ts were their only consumers. Kept rather than deleted
+// because Api.ts is an upstream merge target and Rollup tree-shakes unused
+// exports, so the bundle is unaffected either way; the comment is here so a
+// grep does not read them as live. All of them 404 on this fork.
 export async function getMyTribeNames(): Promise<
   GetMyTribeNamesResponse | false
 > {
@@ -685,40 +691,6 @@ export async function createCheckoutSession(
     return json.url;
   } catch (e) {
     console.error("createCheckoutSession: request failed", e);
-    return false;
-  }
-}
-
-export async function createCustomCurrencyCheckout(
-  hardAmount: number,
-): Promise<string | false> {
-  try {
-    const response = await fetch(
-      `${getApiBase()}/stripe/create-custom-currency-checkout`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: await getAuthHeader(),
-        },
-        body: JSON.stringify({
-          hardAmount: hardAmount,
-          hostname: window.location.origin,
-        }),
-      },
-    );
-    if (!response.ok) {
-      console.error(
-        "createCustomCurrencyCheckout: request failed",
-        response.status,
-        response.statusText,
-      );
-      return false;
-    }
-    const json = await response.json();
-    return json.url;
-  } catch (e) {
-    console.error("createCustomCurrencyCheckout: request failed", e);
     return false;
   }
 }

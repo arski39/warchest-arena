@@ -212,6 +212,25 @@ rather than counted. All are merge targets.
 
 ### Deletions
 
+**The cosmetics storefront is deleted** — `src/client/Store.ts`,
+`src/client/components/CustomCurrencyCard.ts`, `components/TribesPanel.ts` and
+`components/TribeStatsView.ts`, plus the `<store-modal>` mount in `index.html`,
+both nav entries, the store notification dot, the `#affiliate=` deep link and
+the three Stripe `#purchase-completed` branches. This deployment sells nothing:
+`/cosmetics.json` serves an empty catalogue and every purchase endpoint 404s,
+and `Store.ts` linked to `merch.openfront.io` — upstream's shop, from a fork.
+**An upstream merge re-adding any of these four files is a reject, not a
+restore.** Cosmetic _rendering_ is untouched and still works; only the place
+that sold them is gone. `tests/client/NavBarEntries.test.ts` pins the nav.
+
+**The Clans nav entry is hidden, the code is not deleted** — the `16d94b9`
+treatment given to Ranked. `ClanModal.ts`, `ClanApi.ts`,
+`src/core/ClanApiSchemas.ts`, `components/clan/*` and all ~10 clan test files
+are byte-unchanged and still reachable at `#modal=clan`, so restoring the
+feature is putting the button back plus one `main.clans` string. The clan tag
+pipeline (`UsernameInput`, `formatPlayerDisplayName`, `PlayerRow`,
+`TeamAssignment`, `disableClanTags`) is untouched and working.
+
 `proprietary/`'s assets are removed (All Rights Reserved — see `branding.md`).
 The directory, its `LICENSE` and the build plumbing stay, so an upstream merge
 that touches proprietary assets will show as re-adds to reject. Placeholders sit

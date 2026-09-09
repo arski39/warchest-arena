@@ -55,7 +55,6 @@ import "./NewsModal";
 import "./PlayerProfileModal";
 import { RewardsModal } from "./RewardsModal";
 import "./SinglePlayerModal";
-import { StoreModal } from "./Store";
 import { TokenLoginModal } from "./TokenLoginModal";
 import {
   SendKickPlayerIntentEvent,
@@ -181,7 +180,6 @@ class Client {
   private joinModal: JoinLobbyModal;
   private gameModeSelector: GameModeSelector;
   private userSettings: UserSettings = new UserSettings();
-  private storeModal: StoreModal;
   private tokenLoginModal: TokenLoginModal;
   private matchmakingModal: MatchmakingModal;
   private rewardsModal: RewardsModal;
@@ -198,10 +196,6 @@ class Client {
     // Register modals with the URL router. Lobby modals (join/host) and
     // matchmaking are intentionally omitted — they own their own URL state
     // (path-based) or none at all.
-    modalRouter.register("store", {
-      tag: "store-modal",
-      pageId: "page-item-store",
-    });
     modalRouter.register("settings", {
       tag: "user-setting",
       pageId: "page-settings",
@@ -362,11 +356,6 @@ class Client {
       });
     });
 
-    this.storeModal = document.getElementById("page-item-store") as StoreModal;
-    if (!this.storeModal || !(this.storeModal instanceof StoreModal)) {
-      console.warn("Store modal element not found");
-    }
-
     const cosmeticsModal = document.getElementById(
       "cosmetics-modal",
     ) as CosmeticsModal;
@@ -385,16 +374,6 @@ class Client {
       const mobileCosmetics = document.getElementById("cosmetics-input-mobile");
       if (mobileCosmetics) mobileCosmetics.style.display = "none";
     }
-
-    this.storeModal.refresh();
-
-    window.addEventListener("showPage", (e: any) => {
-      if (typeof e?.detail === "string" && e.detail === "page-play") {
-        setTimeout(() => {
-          this.storeModal.refresh();
-        }, 50);
-      }
-    });
 
     this.tokenLoginModal = document.querySelector(
       "token-login",
@@ -481,7 +460,7 @@ class Client {
         );
 
         // Popups below only on a clean homepage load, never over a deep link
-        // (join URL, #modal=..., #purchase-completed, ...).
+        // (join URL, #modal=..., #token-login, ...).
         const cleanHomepage =
           window.location.pathname === "/" && window.location.hash === "";
 
@@ -708,67 +687,6 @@ class Client {
     const params = new URLSearchParams(decodedHash.split("?")[1] || "");
 
     // Handle different hash sections
-    if (decodedHash.startsWith("#purchase-completed")) {
-      // Parse params after the ?
-      const status = params.get("status");
-
-      if (status !== "true") {
-        alertAndStrip("purchase failed");
-        return;
-      }
-
-      const type = params.get("type");
-      if (type === "currency_pack") {
-        alertAndStrip(translateText("store.currency_pack_purchase_success"));
-        return;
-      }
-
-      if (type === "custom_currency") {
-        // Plutonium is credited asynchronously by the Stripe webhook; the
-        // balance refreshes from /users/@me on the next load.
-        alertAndStrip(translateText("store.custom_currency_purchase_success"));
-        return;
-      }
-
-      if (type === "subscription_tier") {
-        alert(translateText("store.subscription_purchase_success"));
-        strip();
-        invalidateUserMe();
-        window.location.reload();
-        return;
-      }
-
-      const cosmeticName = params.get("cosmetic");
-      if (!cosmeticName) {
-        alert("Something went wrong. Please contact support.");
-        console.error("purchase-completed but no pattern name");
-        return;
-      }
-
-      const setCosmetic = () => {
-        if (cosmeticName.startsWith("pattern:")) {
-          this.userSettings.setSelectedPatternName(cosmeticName);
-        } else if (cosmeticName.startsWith("flag:")) {
-          this.userSettings.setFlag(cosmeticName);
-        }
-      };
-      const token = params.get("login-token");
-
-      if (token) {
-        strip();
-        window.addEventListener("beforeunload", () => {
-          // The page reloads after token login, so we need to save the pattern name
-          // in case it is unset during reload.
-          setCosmetic();
-        });
-        this.tokenLoginModal.openWithToken(token);
-      } else {
-        alertAndStrip(`purchase succeeded: ${cosmeticName}`);
-        setCosmetic();
-        this.storeModal.refresh();
-      }
-      return;
-    }
 
     if (decodedHash.startsWith("#token-login")) {
       const token = params.get("token-login");
@@ -831,13 +749,6 @@ class Client {
     }
     if (modalRouter.routeFromHash()) {
       return;
-    }
-    if (decodedHash.startsWith("#affiliate=")) {
-      const affiliateCode = decodedHash.replace("#affiliate=", "");
-      strip();
-      if (affiliateCode) {
-        this.storeModal?.open({ affiliateCode });
-      }
     }
     if (decodedHash.startsWith("#refresh")) {
       window.location.href = "/";
@@ -1013,7 +924,6 @@ class Client {
         "user-setting",
         "troubleshooting-modal",
         "cosmetics-modal",
-        "store-modal",
         "language-modal",
         "news-modal",
         "flag-input-modal",

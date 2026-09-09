@@ -10,10 +10,10 @@
  */
 
 interface RegistryEntry {
-  /** Custom element tag, e.g. "store-modal". */
+  /** Custom element tag, e.g. "clan-modal". */
   tag: string;
   /**
-   * Optional page-content element id (e.g. "page-item-store"). When set, the
+   * Optional page-content element id (e.g. "page-clan"). When set, the
    * router calls `window.showPage(pageId)` for inline modals so the page-content
    * container becomes visible. For popup-style modals, omit.
    */

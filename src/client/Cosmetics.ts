@@ -36,7 +36,6 @@ import { translateText } from "./Utils";
 export const TEMP_FLARE_OFFSET = 1 * 60 * 1000; // 1 minute
 
 let __cosmetics: Promise<Cosmetics | null> | null = null;
-let __cosmeticsHash: string | null = null;
 let __cosmeticsCache: Cosmetics | null = null;
 
 /**
@@ -216,16 +215,6 @@ export async function purchaseCosmetic(
   window.location.reload();
 }
 
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash;
-  }
-  return hash.toString(36);
-}
-
 export async function fetchCosmetics(): Promise<Cosmetics | null> {
   if (__cosmetics !== null) {
     return __cosmetics;
@@ -242,11 +231,9 @@ export async function fetchCosmetics(): Promise<Cosmetics | null> {
         console.error(`Invalid cosmetics: ${result.error.message}`);
         return null;
       }
-      const patternKeys = Object.keys(result.data.patterns).sort();
-      const hashInput = patternKeys
-        .map((k) => k + (result.data.patterns[k].product ? "sale" : ""))
-        .join(",");
-      __cosmeticsHash = simpleHash(hashInput);
+      // [ARENA] A catalogue hash was computed here to drive the nav's
+      // "new items" store dot. The storefront is gone, nothing reads it, and
+      // a write-only field plus the work feeding it is how dead code hides.
       __cosmeticsCache = result.data;
       return result.data;
     } catch (error) {
@@ -271,11 +258,6 @@ export async function resolveFlagUrl(
     return assetUrl(`flags/${code}.svg`);
   }
   return undefined;
-}
-
-export async function getCosmeticsHash(): Promise<string | null> {
-  await fetchCosmetics();
-  return __cosmeticsHash;
 }
 
 export function cosmeticRelationship(

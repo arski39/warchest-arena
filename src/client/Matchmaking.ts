@@ -147,6 +147,8 @@ export class MatchmakingModal extends BaseModal {
     // The matchmaking modal isn't registered with the modal router, so it
     // won't be closed by the store opening from the hash change.
     this.close();
+    // [ARENA] #modal=store no longer resolves -- the storefront was removed and ModalRouter strips an unregistered modal name silently. Left in place because this branch is unreachable on this deployment:
+    // it is gated on limitReached, set only by the matchmaking socket, which 404s here.
     window.location.hash = "modal=store&tab=subscriptions";
   };
 

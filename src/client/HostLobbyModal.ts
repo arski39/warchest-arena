@@ -1002,6 +1002,13 @@ export class HostLobbyModal extends BaseModal {
           ></o-button>
         </div>
 
+        <!-- [ARENA] Dismiss-only. Its confirm button used to navigate to
+             #modal=store, which meant a host who picked "public" had their
+             lobby discarded for a storefront that is now gone -- and
+             ModalRouter strips an unregistered modal name silently, so the
+             button would have become a no-op that still cost you the lobby.
+             This dialog is reachable by default: AUTH_ALLOW_PUBLIC_LOBBIES is
+             off, so canListPublicly is false. -->
         ${this.showSubscriptionRequired
           ? html`<confirm-dialog
               .heading=${translateText(
@@ -1010,13 +1017,8 @@ export class HostLobbyModal extends BaseModal {
               .message=${translateText("host_modal.subscription_required_body")}
               variant="warning"
               .showClose=${true}
-              .buttons=${"confirmOnly"}
-              .confirmText=${translateText("host_modal.view_subscriptions")}
+              .buttons=${"none"}
               @cancel=${() => (this.showSubscriptionRequired = false)}
-              @confirm=${() => {
-                this.showSubscriptionRequired = false;
-                window.location.href = "/#modal=store&tab=subscriptions";
-              }}
             ></confirm-dialog>`
           : ""}
       </div>

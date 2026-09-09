@@ -237,7 +237,6 @@ export class CosmeticsModal extends BaseModal {
       grid = this.renderCrownGrid();
     } else if (tab === "effects") {
       grid = html`<effects-grid
-        mode="select"
         tabbed
         .cosmetics=${this.cosmetics}
         .userMeResponse=${this.userMeResponse}
@@ -246,21 +245,7 @@ export class CosmeticsModal extends BaseModal {
     } else {
       grid = this.renderSkinGrid();
     }
-    return html`
-      <div class="flex justify-center py-3 shrink-0">
-        <o-button
-          class="no-crazygames"
-          variant="primary"
-          size="sm"
-          translationKey="main.store"
-          @click=${() => {
-            this.close();
-            window.showPage?.("page-item-store");
-          }}
-        ></o-button>
-      </div>
-      <div class="px-3 pb-3">${grid}</div>
-    `;
+    return html` <div class="px-3 pb-3">${grid}</div> `;
   }
 
   protected async onOpen(): Promise<void> {
