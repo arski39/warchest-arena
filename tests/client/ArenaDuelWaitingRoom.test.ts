@@ -110,12 +110,30 @@ describe("[ARENA] duel waiting room", () => {
     }
   });
 
-  it("shows the shared start control once both seats are staked", () => {
-    // Filled is the one state where starting is legitimate: the escrow reports
-    // InProgress, so the start-gate permits it and settle_match can pay out.
+  it("counts down to the start once both seats are staked, with no button", () => {
+    // The server arms the countdown itself (maybeAutoStartFilledWager) and
+    // starts the match, so there is nothing left for either player to press.
+    // A cancel here would be re-armed on the next tick, which is exactly the
+    // do-nothing button the unfilled case used to have.
+    const { text, buttons } = waitingRoom({
+      clients: 2,
+      startAt: Date.now() + 5_000,
+    });
+
+    expect(text).toContain("duel.starting_in");
+    expect(buttons).toEqual([]);
+    expect(text).not.toContain("duel.waiting_opponent");
+    expect(text).not.toContain("duel.cancel_and_refund");
+  });
+
+  it("says it is starting even before the server's countdown lands", () => {
+    // One broadcast can separate the second stake from startsAt arriving.
+    // Falling back to the unfilled copy there would tell a player who has
+    // already paid that nobody has joined.
     const { text, buttons } = waitingRoom({ clients: 2, startAt: null });
 
-    expect(buttons).toEqual(["host_modal.start"]);
+    expect(text).toContain("duel.starting_soon");
+    expect(buttons).toEqual([]);
     expect(text).not.toContain("duel.waiting_opponent");
   });
 

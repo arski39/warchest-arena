@@ -592,10 +592,7 @@ export class HostLobbyModal extends BaseModal {
 
   // [ARENA] The duel waiting room: what you staked, who is here, and a way to
   // start once both have. No configuration, because there is none to make.
-  private renderDuelWaitingRoom(
-    statusLabel: string,
-    secondsRemaining: number | null,
-  ) {
+  private renderDuelWaitingRoom(secondsRemaining: number | null) {
     const wager = this.wager;
     const stake =
       wager !== null
@@ -647,7 +644,7 @@ export class HostLobbyModal extends BaseModal {
               ${this.wagerError}
             </p>`
           : nothing}
-        ${this.renderDuelAction(statusLabel, secondsRemaining)}
+        ${this.renderDuelAction(secondsRemaining)}
       </div>
     `;
   }
@@ -672,10 +669,7 @@ export class HostLobbyModal extends BaseModal {
   // So: say what the deadline really is, and offer the one thing that does
   // work. Leaving the lobby routes through end()'s not-started branch, which is
   // the single refund site -- no second refund path, per the lifecycle rules.
-  private renderDuelAction(
-    statusLabel: string,
-    secondsRemaining: number | null,
-  ) {
+  private renderDuelAction(secondsRemaining: number | null) {
     const filled = this.clients.length >= 2;
 
     if (!filled) {
@@ -697,14 +691,19 @@ export class HostLobbyModal extends BaseModal {
       `;
     }
 
+    // Filled: the server arms its own countdown and starts the match, so there
+    // is nothing for either player to press. Deliberately not the shared
+    // start/cancel button — cancelling here would be re-armed by
+    // maybeAutoStartFilledWager() on the next tick, which is how the unfilled
+    // case came to have a button that did nothing.
     return html`
-      <o-button
-        variant=${secondsRemaining !== null ? "warning" : "primary"}
-        width="block"
-        size="lg"
-        .title=${statusLabel}
-        @click=${this.toggleGameStartTimer}
-      ></o-button>
+      <p class="text-white/70 text-sm text-center">
+        ${secondsRemaining !== null
+          ? translateText("duel.starting_in", {
+              time: renderDuration(secondsRemaining),
+            })
+          : translateText("duel.starting_soon")}
+      </p>
     `;
   }
 
@@ -739,7 +738,7 @@ export class HostLobbyModal extends BaseModal {
     // rather than hiding a dozen sections individually: a section added later
     // is then absent from the duel by default, which is the safe direction.
     if (this.duelPreset) {
-      return this.renderDuelWaitingRoom(statusLabel, secondsRemaining);
+      return this.renderDuelWaitingRoom(secondsRemaining);
     }
 
     const inputCards = [

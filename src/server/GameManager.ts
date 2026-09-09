@@ -137,6 +137,16 @@ export class GameManager {
       if (phase === GamePhase.Lobby) {
         game.maybeAutoStartListed();
       }
+      // [ARENA] A filled wagered lobby arms its own short countdown. Checked in
+      // BOTH phases on purpose: a duel whose GameConfig carries maxPlayers
+      // reports Active the instant the second player joins, because
+      // hasReachedMaxPlayerCount short-circuits the Lobby phase — while one
+      // whose config never carried it is still in Lobby. Asking in one phase
+      // only would make the behaviour depend on whether a config push had
+      // landed yet.
+      if (phase === GamePhase.Lobby || phase === GamePhase.Active) {
+        game.maybeAutoStartFilledWager();
+      }
       if (phase === GamePhase.Active) {
         // A matchmade game missing a player at the start deadline is
         // cancelled instead of started short-handed. [ARENA] A wagered lobby
@@ -145,7 +155,12 @@ export class GameManager {
         if (
           !game.hasStarted() &&
           !game.cancelShortHandedMatch() &&
-          !game.cancelUnfilledWageredMatch()
+          !game.cancelUnfilledWageredMatch() &&
+          // [ARENA] Let an armed countdown finish before loading the match. A
+          // full lobby is Active from the moment it fills, so without this the
+          // 5s a duel arms would be consumed in the same tick that armed it and
+          // both players would be dropped straight into the game.
+          !game.startCountdownPending()
         ) {
           // Prestart tells clients to start loading the game.
           game.prestart();

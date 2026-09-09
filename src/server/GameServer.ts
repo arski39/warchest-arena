@@ -97,6 +97,9 @@ const KICK_REASON_MATCH_CANCELLED = "kick_reason.match_cancelled";
 // [ARENA] Distinct from match_cancelled on purpose: that reason makes the
 // client re-enter the matchmaking queue, which is wrong for a private
 // wagered lobby the host set up by hand.
+// [ARENA] How long a filled wagered lobby waits before starting itself.
+export const WAGER_FULL_START_DELAY_MS = 5_000;
+
 const KICK_REASON_WAGER_NOT_FULL = "kick_reason.wager_not_full";
 const KICK_REASON_TOO_MUCH_DATA = "kick_reason.too_much_data";
 
@@ -1969,6 +1972,44 @@ export class GameServer {
   // listed deadline passes, arm the normal start countdown (same path as
   // the host's Start button). Cancelling the countdown re-arms it on the
   // next tick, so the only way out is to unlist.
+  // [ARENA] A wagered lobby that has filled starts itself, after a countdown
+  // short enough not to be a wait and long enough to be seen.
+  //
+  // Without this a duel's second player was at the host's mercy: nothing armed
+  // the timer except maybeAutoStartListed(), five minutes after listing, and
+  // toggle_game_start_timer is the host's button alone. For a matchmade 1v1
+  // between strangers there is nothing left to decide once both stakes are in.
+  //
+  // The trigger is the escrow reporting InProgress -- the same predicate the
+  // start-gate and settle_match use -- rather than a seat count, so it cannot
+  // drift from the condition that makes a payout possible. A lobby this arms
+  // is a lobby that can pay out.
+  //
+  // Nothing to undo: it deliberately re-arms after a disarm, which is why the
+  // duel waiting room offers no cancel once both seats are staked.
+  public maybeAutoStartFilledWager(): void {
+    if (this.hasStarted() || this.startsAt !== undefined) {
+      return;
+    }
+    if (!matchRegistry.isWagered(this.id) || !wagerReadyToStart(this.id)) {
+      return;
+    }
+    this.log.info("wagered lobby filled, starting itself", {
+      gameID: this.id,
+      delayMs: WAGER_FULL_START_DELAY_MS,
+    });
+    this.setStartsAt(Date.now() + WAGER_FULL_START_DELAY_MS);
+  }
+
+  // [ARENA] Whether an armed start countdown still has time left on it.
+  //
+  // A full lobby reports Active immediately -- hasReachedMaxPlayerCount
+  // short-circuits the Lobby phase -- so GameManager would otherwise prestart
+  // in the same tick and skip the countdown entirely.
+  public startCountdownPending(): boolean {
+    return this.startsAt !== undefined && Date.now() < this.startsAt;
+  }
+
   public maybeAutoStartListed(): void {
     if (this.hasStarted() || this.startsAt !== undefined) {
       return;

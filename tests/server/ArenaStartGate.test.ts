@@ -11,7 +11,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatchStatus } from "../../src/core/arena/arenaProgram";
 import { GameType } from "../../src/core/game/Game";
-import { GameServer } from "../../src/server/GameServer";
+import {
+  GameServer,
+  WAGER_FULL_START_DELAY_MS,
+} from "../../src/server/GameServer";
 import {
   matchRegistry,
   wagerReadyToStart,
@@ -223,6 +226,77 @@ describe("[ARENA] wagered start gate", () => {
       game.end();
 
       expect(settleMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // [ARENA] A duel between strangers has nobody to press "start". Once both
+  // stakes are in there is nothing left to decide, and leaving the second
+  // player at the host's mercy -- or at maybeAutoStartListed's five minutes --
+  // is the wrong shape for matchmaking.
+  describe("a filled wagered lobby starts itself", () => {
+    it("arms a short countdown once the escrow reports InProgress", () => {
+      const game = makeGame(GAME_ID);
+      matchRegistry.register(GAME_ID, wager());
+      observe(GAME_ID, MatchStatus.InProgress, 2);
+
+      game.maybeAutoStartFilledWager();
+
+      expect(game.gameInfo().startsAt).toBeGreaterThan(Date.now());
+      expect(game.gameInfo().startsAt).toBeLessThanOrEqual(
+        Date.now() + WAGER_FULL_START_DELAY_MS,
+      );
+    });
+
+    it("does not arm while a seat is still unstaked", () => {
+      // The whole point of the start-gate: an underfilled wagered lobby can
+      // only ever refund, so starting it is worse than not starting it.
+      const game = makeGame(GAME_ID);
+      matchRegistry.register(GAME_ID, wager());
+      observe(GAME_ID, MatchStatus.Open, 1);
+
+      game.maybeAutoStartFilledWager();
+
+      expect(game.gameInfo().startsAt).toBeUndefined();
+    });
+
+    it("leaves free lobbies alone", () => {
+      // wagerReadyToStart() answers true for anything unwagered, so gating on
+      // it alone would auto-start every private lobby on the server.
+      const game = makeGame(FREE_ID);
+
+      game.maybeAutoStartFilledWager();
+
+      expect(game.gameInfo().startsAt).toBeUndefined();
+    });
+
+    it("does not move a countdown the host already armed", () => {
+      const game = makeGame(GAME_ID);
+      matchRegistry.register(GAME_ID, wager());
+      observe(GAME_ID, MatchStatus.InProgress, 2);
+      game.setStartsAt(Date.now() + 60_000);
+      const armed = game.gameInfo().startsAt;
+
+      game.maybeAutoStartFilledWager();
+
+      expect(game.gameInfo().startsAt).toBe(armed);
+    });
+
+    it("holds the match back until the countdown expires", () => {
+      // A full lobby reports Active immediately, because
+      // hasReachedMaxPlayerCount short-circuits the Lobby phase. Without this
+      // the countdown would be consumed in the tick that armed it and both
+      // players would be dropped straight into the game.
+      const game = makeGame(GAME_ID);
+      matchRegistry.register(GAME_ID, wager());
+      observe(GAME_ID, MatchStatus.InProgress, 2);
+
+      game.maybeAutoStartFilledWager();
+      expect(game.startCountdownPending()).toBe(true);
+
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + WAGER_FULL_START_DELAY_MS + 1);
+      expect(game.startCountdownPending()).toBe(false);
+      vi.useRealTimers();
     });
   });
 });
