@@ -11,11 +11,14 @@ import {
   invalidateUserMe,
   setMarketingConsent,
 } from "./Api";
+import { getConnectedWallet } from "./arena/WalletProvider"; // [ARENA]
+import { storedWalletAddress } from "./arena/walletSession"; // [ARENA]
 import {
   linkGoogle,
   logOut,
   reauthAfterCrazyGamesChange,
   sendMagicLink,
+  sessionProvider,
 } from "./Auth";
 import "./components/baseComponents/stats/DiscordUserHeader";
 import "./components/baseComponents/stats/PlayerGameHistoryView";
@@ -57,6 +60,11 @@ export class AccountModal extends BaseModal {
   // only has to show one of them.
   @state() private walletLoginInFlight: boolean = false;
   @state() private walletLoginError: string | null = null;
+  // [ARENA] The address of the wallet this session belongs to, or null. Resolved
+  // on open from the token's provider claim — isLinkedAccount() cannot see it,
+  // because /users/@me reports `user: {}` for every session on this fork, which
+  // is why a successful wallet login used to render the sign-in screen again.
+  @state() private walletSessionAddress: string | null = null;
 
   private userMeResponse: UserMeResponse | null = null;
   private statsTree: PlayerStatsTree | null = null;
@@ -175,7 +183,9 @@ export class AccountModal extends BaseModal {
       return html`<div class="custom-scrollbar mr-1">
         ${crazyGamesSDK.isOnCrazyGames()
           ? this.renderCrazyGamesSignIn()
-          : this.renderLoginOptions()}
+          : this.walletSessionAddress !== null
+            ? this.renderWalletSession(this.walletSessionAddress)
+            : this.renderLoginOptions()}
       </div>`;
     }
     return html`
@@ -699,6 +709,39 @@ export class AccountModal extends BaseModal {
     `;
   }
 
+  // [ARENA] What a signed-in wallet sees. The tabbed account view above is
+  // upstream's, gated on a linked third-party identity that cannot exist here,
+  // so this is deliberately small: who you are, and how to stop being them.
+  private renderWalletSession(address: string) {
+    return html`
+      <div class="flex items-center justify-center p-6 min-h-full">
+        <div
+          class="w-full max-w-md bg-white/5 rounded-2xl border border-white/10 p-8 text-center"
+        >
+          <p class="text-white/50 text-sm font-medium mb-6">
+            ${translateText("account_modal.wallet_signed_in")}
+          </p>
+          <p
+            class="font-mono text-white text-sm break-all bg-black/30 rounded-lg px-4 py-3 border border-white/10"
+          >
+            ${address}
+          </p>
+          <p class="text-white/40 text-xs mt-4 leading-relaxed">
+            ${translateText("account_modal.wallet_session_desc")}
+          </p>
+          <div class="mt-8 border-t border-white/10 pt-6">
+            <button
+              @click="${this.handleLogout}"
+              class="text-[10px] font-bold text-white/20 hover:text-red-400 transition-colors uppercase tracking-widest pb-0.5"
+            >
+              ${translateText("account_modal.log_out")}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private renderLoginOptions() {
     return html`
       <div class="flex items-center justify-center p-6 min-h-full">
@@ -903,6 +946,16 @@ export class AccountModal extends BaseModal {
 
   protected onOpen(args?: Record<string, unknown>): void {
     this.isLoadingUser = true;
+    // [ARENA] The provider claim is the authority on whether there is a wallet
+    // session; the extension and the remembered value are only two ways to learn
+    // the address, and the extension is often not reconnected yet.
+    void (async () => {
+      const provider = await sessionProvider();
+      this.walletSessionAddress =
+        provider === "wallet"
+          ? (getConnectedWallet()?.publicKey ?? storedWalletAddress())
+          : null;
+    })();
     this.handleLinkResult(args);
     this.loginError = consumeLoginResult(args);
 

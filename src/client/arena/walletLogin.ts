@@ -38,6 +38,7 @@ import {
   toBase64,
   type WalletAdapter,
 } from "./WalletProvider";
+import { rememberWalletAddress } from "./walletSession";
 
 /** Why a login attempt did not produce a session. */
 export type WalletLoginFailure =
@@ -220,6 +221,10 @@ export async function walletLogin(): Promise<{ walletAddress: string }> {
   }
 
   adoptSession(jwt, expiresIn);
+  // The token says `wallet` but carries no address, and the extension may not
+  // have re-connected by the time the next page load renders. Remember it, or a
+  // real session has nothing to display itself with.
+  rememberWalletAddress(wallet.publicKey);
   // The cached /users/@me belongs to the guest we just stopped being.
   invalidateUserMe();
   return { walletAddress: wallet.publicKey };

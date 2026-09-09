@@ -89,6 +89,7 @@ import {
   getConnectedWallet,
   mountWalletProvider,
 } from "./arena/WalletProvider";
+import { storedWalletAddress } from "./arena/walletSession";
 mountWalletProvider();
 
 declare global {
@@ -429,10 +430,19 @@ class Client {
         // be reachable for the address. mountWalletProvider() above has already
         // re-adopted an authorised connection by now, so on a reload this is
         // populated without prompting.
+        // The provider claim is the authority on whether this is a session;
+        // the address is only how to render it. The extension is asked first
+        // because it is live, and the remembered value covers the reload case —
+        // mountWalletProvider() runs at module scope while Phantom's
+        // auto-connect is async, so right after a load it is usually still
+        // null. Reading only the extension made a real login look like a
+        // failed one.
         const provider = await sessionProvider();
         const wallet =
-          provider === "wallet" ? getConnectedWallet()?.publicKey : undefined;
-        updateAccountNavButton(userMeResponse, wallet ?? null);
+          provider === "wallet"
+            ? (getConnectedWallet()?.publicKey ?? storedWalletAddress())
+            : null;
+        updateAccountNavButton(userMeResponse, wallet);
       }
       const isAdFree =
         userMeResponse !== false && userMeResponse.player?.adfree === true;

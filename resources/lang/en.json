@@ -88,6 +88,8 @@
     "wallet_login_desc": "Sign a message with your Solana wallet. No email, no password, nothing stored — the same wallet is the same player everywhere.",
     "wallet_login_failed": "Could not sign you in. Try again.",
     "wallet_no_extension": "No Solana wallet found. Install Phantom (phantom.app) to sign in.",
+    "wallet_session_desc": "Your wallet is your account here — the same wallet is the same player on any device, and nothing is stored server-side.",
+    "wallet_signed_in": "Signed in with your wallet",
     "your_subscription": "Your Subscription"
   },
   "build_menu": {

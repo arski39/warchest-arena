@@ -11,6 +11,15 @@ vi.mock("../../src/client/Api", () => ({
   getApiBase: vi.fn(() => ""),
 }));
 
+// [ARENA] Hoisted so the vi.mock factories below can close over them and a test
+// can drive the session. Without sessionProvider in the Auth mock the modal's
+// resolution threw as an unhandled rejection — which vitest reported as errors
+// while still passing every test, so the wallet branch was untested.
+const arenaMocks = vi.hoisted(() => ({
+  sessionProvider: vi.fn(async (): Promise<string | null> => null),
+  storedWalletAddress: vi.fn((): string | null => null),
+}));
+
 vi.mock("../../src/client/Auth", () => ({
   discordLogin: vi.fn(),
   googleLogin: vi.fn(),
@@ -19,6 +28,20 @@ vi.mock("../../src/client/Auth", () => ({
   reauthAfterCrazyGamesChange: vi.fn(async () => false),
   sendMagicLink: vi.fn(async () => true),
   getAuthHeader: vi.fn(async () => "Bearer test-token"),
+  sessionProvider: arenaMocks.sessionProvider,
+}));
+
+vi.mock("../../src/client/arena/walletSession", () => ({
+  storedWalletAddress: arenaMocks.storedWalletAddress,
+  rememberWalletAddress: vi.fn(),
+  forgetWalletAddress: vi.fn(),
+}));
+
+// No extension in jsdom. The remembered address is the path that matters here:
+// it is what makes a session survive a reload, and reading only the extension
+// is what made a successful login render the sign-in screen again.
+vi.mock("../../src/client/arena/WalletProvider", () => ({
+  getConnectedWallet: vi.fn(() => null),
 }));
 
 vi.mock("../../src/client/Utils", () => ({
@@ -109,6 +132,54 @@ describe("AccountModal — rendering", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await modal.updateComplete;
   }
+
+  // [ARENA] Puts a wallet session in place for the next open.
+  function signedInWith(address: string): void {
+    arenaMocks.sessionProvider.mockResolvedValue("wallet");
+    arenaMocks.storedWalletAddress.mockReturnValue(address);
+  }
+
+  it("shows the wallet address, not the sign-in screen, for a wallet session", async () => {
+    // THE REGRESSION. isLinkedAccount() reads /users/@me, which returns
+    // `user: {}` for every session on this fork — so a real wallet session
+    // rendered renderLoginOptions() and looked like a login that silently
+    // failed. Reported from the live site.
+    signedInWith("8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc");
+    modal.open();
+    await flushOpen();
+
+    const text = modal.textContent ?? "";
+    expect(text).toContain("8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc");
+    expect(text).toContain("account_modal.wallet_signed_in");
+    // The connect button must be gone, not merely further down the page.
+    expect(text).not.toContain("account_modal.wallet_login");
+  });
+
+  it("still shows the sign-in screen for a guest session", async () => {
+    // A guest is the default and must keep seeing the way in. `guest` rather
+    // than null, because that is what the token actually says.
+    arenaMocks.sessionProvider.mockResolvedValue("guest");
+    arenaMocks.storedWalletAddress.mockReturnValue(null);
+    modal.open();
+    await flushOpen();
+
+    const text = modal.textContent ?? "";
+    expect(text).toContain("account_modal.wallet_login");
+    expect(text).not.toContain("account_modal.wallet_signed_in");
+  });
+
+  it("ignores a remembered address when the session is not a wallet one", async () => {
+    // A stale entry from a logout that failed to clear is a display cache, not
+    // a credential. Believing it would claim an identity the token denies.
+    arenaMocks.sessionProvider.mockResolvedValue("guest");
+    arenaMocks.storedWalletAddress.mockReturnValue("8uqQv5J69KNM3pHx7bVKh");
+    modal.open();
+    await flushOpen();
+
+    const text = modal.textContent ?? "";
+    expect(text).toContain("account_modal.wallet_login");
+    expect(text).not.toContain("8uqQv5J69KNM3pHx7bVKh");
+  });
 
   it("shows the Steam account (no link/login CTAs) for a Steam-primary user", async () => {
     const userMe = makeUserMe({

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { TokenPayload, TokenPayloadSchema } from "../core/ApiSchemas";
 import { base64urlToUuid } from "../core/Base64";
 import { getApiBase, getAudience } from "./Api";
+import { forgetWalletAddress } from "./arena/walletSession"; // [ARENA]
 import { crazyGamesSDK } from "./CrazyGamesSDK";
 import { steamSDK } from "./SteamSDK";
 import { generateCryptoRandomUUID } from "./Utils";
@@ -130,6 +131,7 @@ export async function logOut(allSessions: boolean = false): Promise<boolean> {
   } finally {
     __jwt = null;
     localStorage.removeItem(PERSISTENT_ID_KEY);
+    forgetWalletAddress(); // [ARENA]
     new UserSettings().clearFlag();
     new UserSettings().setSelectedPatternName(undefined);
   }

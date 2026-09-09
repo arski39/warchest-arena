@@ -51,6 +51,16 @@ vi.mock("../../src/client/Auth", () => ({
   logOut: vi.fn(),
   reauthAfterCrazyGamesChange: vi.fn(),
   sendMagicLink: vi.fn(),
+  // [ARENA] AccountModal resolves the wallet session on open. Omitting this
+  // throws an unhandled rejection that vitest reports as an error while still
+  // passing every test here — green, with the modal's open path broken.
+  sessionProvider: vi.fn(async () => null),
+}));
+
+vi.mock("../../src/client/arena/walletSession", () => ({
+  storedWalletAddress: vi.fn(() => null),
+  rememberWalletAddress: vi.fn(),
+  forgetWalletAddress: vi.fn(),
 }));
 
 vi.mock("../../src/client/Cosmetics", () => ({
