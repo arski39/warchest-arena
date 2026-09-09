@@ -48,7 +48,11 @@ describe("[ARENA] duel matchmaking", () => {
   let panel: DuelPanel;
   let joined: { gameID: string; source?: string }[];
   let hostOpened: Record<string, unknown>[];
-  const onJoin = (e: CustomEvent) => joined.push(e.detail);
+  // Braces, not a concise body: the concise form returns push()'s number, and
+  // the cast to EventListener then fails because the types do not overlap.
+  const onJoin = (e: CustomEvent): void => {
+    joined.push(e.detail);
+  };
 
   beforeEach(async () => {
     document.body.innerHTML = "";

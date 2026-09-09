@@ -109,11 +109,13 @@ describe("[ARENA] home page mode order", () => {
     const el = mount();
     await el.updateComplete;
 
+    // [ARENA] No Ranked: its queue is upstream's closed API and 404s here, so
+    // the button never worked. The modal and Matchmaking.ts are untouched and
+    // the page is still reachable at #modal=ranked.
     expect(actionLabels(el)).toEqual([
       "main.duel",
       "main.solo",
       "main.create",
-      "mode_selector.ranked_title",
       "main.join",
     ]);
   });

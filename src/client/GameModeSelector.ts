@@ -160,15 +160,18 @@ export class GameModeSelector extends LitElement {
             SECONDARY_CARD,
           )}
         </div>
-        <div class="grid grid-cols-3 gap-4 h-14">
+        <!-- [ARENA] Ranked is deliberately absent. Its queue lived in
+             upstream's closed API — Matchmaking.ts opens a socket to
+             <issuer>/matchmaking/join, which this fork's auth service returns
+             404 for — so the button never did anything here, and next to a
+             wagered 1v1 two things read as "compete seriously".
+             The code is intact and the page is still reachable at
+             #modal=ranked (registered in Main.ts), so restoring it is putting
+             this card back. -->
+        <div class="grid grid-cols-2 gap-4 h-14">
           ${this.renderSmallActionCard(
             translateText("main.create"),
             this.openHostLobby,
-            SECONDARY_CARD,
-          )}
-          ${this.renderSmallActionCard(
-            translateText("mode_selector.ranked_title"),
-            this.openRankedMenu,
             SECONDARY_CARD,
           )}
           ${this.renderSmallActionCard(
@@ -241,11 +244,6 @@ export class GameModeSelector extends LitElement {
   private renderSpecialLobbyCard(lobby: PublicGameInfo) {
     return this.renderLobbyCard(lobby, this.getLobbyTitle(lobby));
   }
-
-  private openRankedMenu = () => {
-    if (!this.validateUsername()) return;
-    window.showPage?.("page-ranked");
-  };
 
   private openSinglePlayerModal = () => {
     if (!this.validateUsername()) return;
