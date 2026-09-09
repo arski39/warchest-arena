@@ -8,6 +8,12 @@ import {
   showToast,
   translateText,
 } from "../client/Utils";
+import {
+  duelBots,
+  duelIsCompact,
+  duelMaxTimerMinutes,
+  randomDuelMap,
+} from "../core/arena/duelSettings"; // [ARENA]
 import { formatStake } from "../core/arena/stakeTiers"; // [ARENA]
 import { GameEnv } from "../core/configuration/Config";
 import { EventBus } from "../core/EventBus";
@@ -1041,8 +1047,22 @@ export class HostLobbyModal extends BaseModal {
         // through the eventBus, which does not exist until the host's
         // connection is up. toggleGameStartTimer() awaits putGameConfig()
         // before starting, so this lands before the match either way.
+        //
+        // The pool is upstream's ranked 1v1 one, shared with
+        // MapPlaylist.get1v1Config() through core/arena/duelSettings.ts —
+        // deliberately not getRandomMapType(), which draws from every map
+        // including ones nobody would choose for a two-player match.
+        const compact = duelIsCompact();
         this.useRandomMap = true;
-        this.selectedMap = getRandomMapType();
+        this.selectedMap = randomDuelMap();
+        this.compactMap = compact;
+        this.bots = duelBots(compact);
+        this.maxTimer = true;
+        this.maxTimerValue = duelMaxTimerMinutes(compact);
+        this.gameMode = GameMode.FFA;
+        // 0 is "disabled" through sliderToNationsConfig. Nations in a 1v1 are
+        // a third party deciding a wagered match.
+        this.nations = 0;
       }
     }
     this.startLobbyUpdates();

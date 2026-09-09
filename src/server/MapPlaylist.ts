@@ -1,3 +1,9 @@
+import {
+  duelBots,
+  duelIsCompact,
+  duelMaxTimerMinutes,
+  randomDuelMap,
+} from "../core/arena/duelSettings"; // [ARENA]
 import { SAM_CONSTRUCTION_TICKS } from "../core/configuration/Config";
 import {
   maps as allMaps,
@@ -402,18 +408,13 @@ export class MapPlaylist {
   }
 
   public get1v1Config(): GameConfig {
-    const maps = [
-      GameMapType.Australia, // 40%
-      GameMapType.Australia,
-      GameMapType.Iceland, // 20%
-      GameMapType.Asia, // 20%
-      GameMapType.EuropeClassic, // 20%
-    ];
-    const isCompact = Math.random() < 0.2;
+    // [ARENA] Pool and derived settings moved to core/arena/duelSettings.ts so
+    // the wagered duel path reads the same list. Values unchanged in the move.
+    const isCompact = duelIsCompact();
     return {
       donateGold: false,
       donateTroops: false,
-      gameMap: maps[Math.floor(Math.random() * maps.length)],
+      gameMap: randomDuelMap(),
       maxPlayers: 2,
       gameType: GameType.Public,
       gameMapSize: isCompact ? GameMapSize.Compact : GameMapSize.Normal,
@@ -421,12 +422,12 @@ export class MapPlaylist {
       rankedType: RankedType.OneVOne,
       infiniteGold: false,
       infiniteTroops: false,
-      maxTimerValue: isCompact ? 10 : 15,
+      maxTimerValue: duelMaxTimerMinutes(isCompact),
       instantBuild: false,
       randomSpawn: false,
       nations: "disabled",
       gameMode: GameMode.FFA,
-      bots: isCompact ? 100 : 400,
+      bots: duelBots(isCompact),
       spawnImmunityDuration: 30 * 10,
       disabledUnits: [],
     } satisfies GameConfig;
