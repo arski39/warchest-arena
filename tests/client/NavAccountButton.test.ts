@@ -17,6 +17,7 @@ function mountNav() {
       <svg id="nav-account-person-icon" class="hidden"></svg>
       <span id="nav-account-email-badge" class="hidden"></span>
       <span id="nav-account-signin-text" class="hidden"></span>
+      <span id="nav-account-wallet-text" class="hidden"></span>
     </button>`;
   return {
     button: document.getElementById("nav-account-button")!,
@@ -24,6 +25,7 @@ function mountNav() {
     personIcon: document.getElementById("nav-account-person-icon")!,
     emailBadge: document.getElementById("nav-account-email-badge")!,
     signInText: document.getElementById("nav-account-signin-text")!,
+    walletText: document.getElementById("nav-account-wallet-text")!,
   };
 }
 
@@ -52,6 +54,44 @@ describe("updateAccountNavButton", () => {
     updateAccountNavButton(false);
     expect(hidden(nav.signInText)).toBe(false);
     expect(hidden(nav.avatar)).toBe(true);
+  });
+
+  // [ARENA] A wallet session. On this fork every branch above this one is
+  // unreachable — /users/@me returns `user: {}` — so without it the nav shows
+  // "sign in" to a player who is signed in, which is the state that made wallet
+  // login look broken.
+  it("shows the shortened wallet address for a wallet session", () => {
+    updateAccountNavButton(
+      false,
+      "8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc",
+    );
+
+    expect(hidden(nav.walletText)).toBe(false);
+    expect(nav.walletText.textContent).toBe("8uqQ…2bdc");
+    // The signed-out prompt must be gone, not merely covered.
+    expect(hidden(nav.signInText)).toBe(true);
+    expect(hidden(nav.personIcon)).toBe(false);
+  });
+
+  it("still shows the sign-in prompt for a guest with no wallet session", () => {
+    // A guest who connected an extension to stake is NOT logged in, and the
+    // caller passes null for exactly that case. Reading a connected wallet as a
+    // session would claim an identity the token does not carry.
+    updateAccountNavButton(false, null);
+
+    expect(hidden(nav.walletText)).toBe(true);
+    expect(hidden(nav.signInText)).toBe(false);
+  });
+
+  it("clears the wallet label when the session goes away", () => {
+    updateAccountNavButton(
+      false,
+      "8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc",
+    );
+    updateAccountNavButton(false, null);
+
+    expect(hidden(nav.walletText)).toBe(true);
+    expect(hidden(nav.signInText)).toBe(false);
   });
 
   it("shows the Steam avatar (not the sign-in prompt) for a Steam session", () => {

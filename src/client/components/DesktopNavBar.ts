@@ -206,6 +206,16 @@ export class DesktopNavBar extends LitElement {
             data-i18n="main.sign_in"
           >
           </span>
+          <!-- [ARENA] The shortened wallet address for a wallet session. Its own
+               span rather than reusing the one above, which carries data-i18n
+               and is owned by the translation pass — writing an address into it
+               would either be overwritten or leak the address back as the
+               signed-out label. -->
+          <span
+            id="nav-account-wallet-text"
+            class="hidden text-xs font-bold tracking-widest font-mono"
+          >
+          </span>
         </button>
       </nav>
     `;

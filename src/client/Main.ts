@@ -18,7 +18,7 @@ import "./AccountModal";
 import { adGatekeeper } from "./AdGatekeeper";
 import { loadAdmiral, onAdmiralMeasured } from "./Admiral";
 import { fetchLobbyWager, getUserMe, invalidateUserMe } from "./Api"; // [ARENA] fetchLobbyWager
-import { reauthAfterCrazyGamesChange, userAuth } from "./Auth";
+import { reauthAfterCrazyGamesChange, sessionProvider, userAuth } from "./Auth";
 import "./ClanModal";
 import { joinLobby, type JoinLobbyResult } from "./ClientGameRunner";
 import { getPlayerCosmeticsRefs } from "./Cosmetics";
@@ -85,7 +85,10 @@ import "./styles/layout/container.css";
 import "./styles/layout/header.css";
 import "./styles/modal/chat.css";
 // [ARENA] Auto-reconnect if user previously authorized a Solana wallet.
-import { mountWalletProvider } from "./arena/WalletProvider";
+import {
+  getConnectedWallet,
+  mountWalletProvider,
+} from "./arena/WalletProvider";
 mountWalletProvider();
 
 declare global {
@@ -420,7 +423,16 @@ class Client {
       if (crazyGamesSDK.isOnCrazyGames()) {
         void updateCrazyGamesNavButton();
       } else {
-        updateAccountNavButton(userMeResponse);
+        // [ARENA] Both halves are required before the nav claims a wallet
+        // session: the token must say `wallet` (a guest who connected an
+        // extension to stake is still a guest) and the extension must actually
+        // be reachable for the address. mountWalletProvider() above has already
+        // re-adopted an authorised connection by now, so on a reload this is
+        // populated without prompting.
+        const provider = await sessionProvider();
+        const wallet =
+          provider === "wallet" ? getConnectedWallet()?.publicKey : undefined;
+        updateAccountNavButton(userMeResponse, wallet ?? null);
       }
       const isAdFree =
         userMeResponse !== false && userMeResponse.player?.adfree === true;

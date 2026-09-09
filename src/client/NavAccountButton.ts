@@ -6,7 +6,17 @@ import { getDiscordAvatarUrl, translateText } from "./Utils";
 // response: a linked identity shows its avatar/badge, everything else shows the
 // signed-out prompt. Extracted from Main.ts so the identity precedence — which
 // now includes Steam — is unit-testable in jsdom.
-export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
+export function updateAccountNavButton(
+  userMeResponse: UserMeResponse | false,
+  // [ARENA] The address of a wallet session, or null. Passed in rather than read
+  // here because it is two facts from two places: the token's `provider` claim
+  // (this is a wallet session, not a guest who merely has an extension
+  // connected for staking) and WalletProvider's connected adapter (the address
+  // itself). /users/@me deliberately reports neither — putting the wallet in its
+  // `user` block would light up the account-management UI this fork has no
+  // backend for.
+  walletAddress: string | null = null,
+) {
   const button = document.getElementById("nav-account-button");
   if (!button) return;
 
@@ -22,6 +32,9 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
   const signInTextEl = document.getElementById(
     "nav-account-signin-text",
   ) as HTMLSpanElement | null;
+  const walletTextEl = document.getElementById(
+    "nav-account-wallet-text",
+  ) as HTMLSpanElement | null; // [ARENA]
 
   // Auth state is resolved, so the button no longer shows the loading spinner.
   document
@@ -41,6 +54,7 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
     emailBadgeEl?.classList.add("hidden");
     signInTextEl?.classList.add("hidden");
     button?.classList.add("border", "border-white/20");
+    walletTextEl?.classList.add("hidden"); // [ARENA]
   };
 
   const showAvatar = (src: string, alt?: string) => {
@@ -66,6 +80,7 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
     personIconEl?.classList.add("hidden");
     emailBadgeEl?.classList.add("hidden");
     signInTextEl?.classList.add("hidden");
+    walletTextEl?.classList.add("hidden"); // [ARENA]
     button?.classList.remove("border", "border-white/20");
   };
 
@@ -74,7 +89,28 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
     personIconEl?.classList.remove("hidden");
     emailBadgeEl?.classList.add("hidden");
     signInTextEl?.classList.remove("hidden");
+    walletTextEl?.classList.add("hidden"); // [ARENA]
     // Restore border when showing signin state
+    button?.classList.add("border", "border-white/20");
+  };
+
+  // [ARENA] A wallet session: the shortened address instead of "sign in".
+  //
+  // Truncated head and tail, never the middle: base58 addresses share no common
+  // prefix, so the first characters do not identify one, and a reader comparing
+  // it against their wallet checks both ends.
+  const showWallet = (address: string) => {
+    avatarEl?.classList.add("hidden");
+    personIconEl?.classList.remove("hidden");
+    emailBadgeEl?.classList.add("hidden");
+    signInTextEl?.classList.add("hidden");
+    if (walletTextEl) {
+      walletTextEl.textContent =
+        address.length > 11
+          ? `${address.slice(0, 4)}…${address.slice(-4)}`
+          : address;
+      walletTextEl.classList.remove("hidden");
+    }
     button?.classList.add("border", "border-white/20");
   };
 
@@ -84,6 +120,7 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
     emailBadgeEl?.classList.remove("hidden");
     signInTextEl?.classList.add("hidden");
     button?.classList.add("border", "border-white/20");
+    walletTextEl?.classList.add("hidden"); // [ARENA]
   };
 
   const discord =
@@ -141,6 +178,15 @@ export function updateAccountNavButton(userMeResponse: UserMeResponse | false) {
   // session with no linked identity at all gets the sign-in prompt.
   if (userMeResponse !== false && hasLinkedIdentity(userMeResponse.user)) {
     showLoggedInPlain();
+    return;
+  }
+
+  // [ARENA] Last before the signed-out prompt, so a linked upstream identity
+  // still wins if one ever exists. On this fork nothing above ever matches —
+  // /users/@me returns `user: {}` — so in practice this is the only logged-in
+  // state the nav can show.
+  if (walletAddress !== null) {
+    showWallet(walletAddress);
     return;
   }
 

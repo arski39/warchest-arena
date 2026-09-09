@@ -89,6 +89,18 @@ export function adoptSession(jwt: string, expiresIn: number): void {
   __expiresAt = Date.now() + expiresIn * 1000;
 }
 
+// [ARENA] How the current session was established — `"guest"`, `"wallet"`, or
+// null when there is no session.
+//
+// Read from the access token's own `provider` claim rather than from
+// /users/@me, which deliberately reports no identity at all on this fork. A
+// connected wallet extension is NOT the same fact: a guest who connected one to
+// stake has a wallet available and is still a guest.
+export async function sessionProvider(): Promise<string | null> {
+  const auth = await userAuth();
+  return auth === false ? null : (auth.claims.provider ?? null);
+}
+
 export async function getAuthHeader(): Promise<string> {
   const userAuthResult = await userAuth();
   if (!userAuthResult) return "";
