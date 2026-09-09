@@ -11,7 +11,7 @@ import {
   invalidateUserMe,
   setMarketingConsent,
 } from "./Api";
-import { getConnectedWallet } from "./arena/WalletProvider"; // [ARENA]
+import { getConnectedWallet, phantomBrowseLink } from "./arena/WalletProvider"; // [ARENA]
 import { storedWalletAddress } from "./arena/walletSession"; // [ARENA]
 import {
   linkGoogle,
@@ -791,7 +791,9 @@ export class AccountModal extends BaseModal {
               <span class="font-bold tracking-wide"
                 >${this.walletLoginInFlight
                   ? translateText("account_modal.wallet_connecting")
-                  : translateText("account_modal.wallet_login")}</span
+                  : phantomBrowseLink() !== null
+                    ? translateText("account_modal.wallet_open_phantom")
+                    : translateText("account_modal.wallet_login")}</span
               >
             </button>
             <p class="text-white/40 text-xs text-center leading-relaxed">
@@ -864,6 +866,17 @@ export class AccountModal extends BaseModal {
   // cannot leave half the UI describing a guest who no longer exists.
   private handleWalletLogin = async (): Promise<void> => {
     if (this.walletLoginInFlight) return;
+    // [ARENA] A mobile browser tab cannot reach the Phantom app at all -- no
+    // provider is injected outside Phantom's own in-app browser -- so connect
+    // would only throw "install Phantom" at someone who has it installed.
+    // Hand off to the app instead. Safe here in a way it is not at the stake
+    // prompt: Phantom's browser is a separate context with its own session, and
+    // at the menu nothing is bound to the current one yet.
+    const deeplink = phantomBrowseLink();
+    if (deeplink !== null) {
+      window.location.href = deeplink;
+      return;
+    }
     this.walletLoginInFlight = true;
     this.walletLoginError = null;
     try {
@@ -884,7 +897,9 @@ export class AccountModal extends BaseModal {
         this.walletLoginError = null;
       } else if (reason === "no-wallet") {
         this.walletLoginError = translateText(
-          "account_modal.wallet_no_extension",
+          phantomBrowseLink() !== null
+            ? "account_modal.wallet_open_phantom_hint"
+            : "account_modal.wallet_no_extension",
         );
       } else {
         this.walletLoginError =

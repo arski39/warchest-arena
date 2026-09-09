@@ -88,6 +88,8 @@
     "wallet_login_desc": "Sign a message with your Solana wallet. No email, no password, nothing stored — the same wallet is the same player everywhere.",
     "wallet_login_failed": "Could not sign you in. Try again.",
     "wallet_no_extension": "No Solana wallet found. Install Phantom (phantom.app) to sign in.",
+    "wallet_open_phantom": "Open in Phantom",
+    "wallet_open_phantom_hint": "On a phone, sign in from inside the Phantom app’s browser. Tap “Open in Phantom” to go there.",
     "wallet_session_desc": "Your wallet is your account here — the same wallet is the same player on any device, and nothing is stored server-side.",
     "wallet_signed_in": "Signed in with your wallet",
     "your_subscription": "Your Subscription"
@@ -1792,6 +1794,7 @@
     "description": "Your stake is transferred into an on-chain escrow that only the program can pay out. The winner is paid automatically when the match ends.",
     "entry_fee": "Your stake",
     "error_generic": "Could not stake into this match. Please try again.",
+    "error_mobile_no_wallet": "Staking on a phone needs the Phantom app’s own browser. Open warchest-arena.com inside Phantom and join the duel again from there.",
     "forfeit_notice": "Once the last seat is staked the match begins, and leaving after that forfeits your stake.",
     "join_and_stake": "Join & stake",
     "max_players": "Staked players",

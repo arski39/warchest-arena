@@ -42,6 +42,10 @@ vi.mock("../../src/client/arena/walletSession", () => ({
 // is what made a successful login render the sign-in screen again.
 vi.mock("../../src/client/arena/WalletProvider", () => ({
   getConnectedWallet: vi.fn(() => null),
+  // [ARENA] Null is "a desktop browser, or a phone already inside Phantom's
+  // in-app browser" — i.e. the ordinary path these cases are about. The mobile
+  // hand-off has its own suite in ArenaPhantomMobile.test.ts.
+  phantomBrowseLink: vi.fn(() => null),
 }));
 
 vi.mock("../../src/client/Utils", () => ({

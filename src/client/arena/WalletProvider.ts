@@ -33,6 +33,55 @@ function getPhantom(): PhantomProvider | null {
   return w.phantom?.solana ?? w.solana ?? null;
 }
 
+/**
+ * [ARENA] Whether this looks like a phone or tablet browser.
+ *
+ * UA sniffing, which is normally a smell, but the thing being detected really
+ * is "which app store did this browser come from" rather than a capability:
+ * Phantom ships a browser extension on desktop and a standalone app on mobile,
+ * and no feature test distinguishes those.
+ *
+ * iPadOS 13+ reports itself as Macintosh, so touch points are what separate an
+ * iPad from a Mac. Getting this wrong is cheap in both directions -- a
+ * misdetected desktop is shown a link that opens phantom.app, a misdetected
+ * phone is shown install instructions -- which is why a UA test is tolerable
+ * here and would not be for anything load-bearing.
+ */
+function isMobileBrowser(): boolean {
+  const ua = navigator.userAgent;
+  const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  return /Android|iPhone|iPod|iPad/i.test(ua) || iPadOS;
+}
+
+/**
+ * [ARENA] The Phantom universal link that reopens a page inside Phantom's own
+ * in-app browser, where the provider IS injected.
+ *
+ * Returns null whenever the normal path can work: a wallet is already injected
+ * (including when we are *already* inside Phantom's browser), or this is a
+ * desktop browser, where the answer is the extension rather than the app.
+ *
+ * This is the whole reason mobile sign-in appeared to do nothing. On a phone,
+ * Safari and Chrome inject no `window.phantom`, so `connectWallet()` threw
+ * "install Phantom" at people who had Phantom installed -- the app simply
+ * cannot be reached from an ordinary mobile browser tab.
+ *
+ * ⚠️ Phantom's browser is a SEPARATE browser context: no cookies, no
+ * localStorage, so following this link starts a fresh session. That is
+ * harmless at the menu, where nothing is bound yet, and is why the stake
+ * prompt does NOT follow it -- switching mid-lobby would rejoin the player as
+ * a second client while their first one is still connected, filling a duel
+ * with one person twice over.
+ */
+export function phantomBrowseLink(): string | null {
+  if (getPhantom() !== null || !isMobileBrowser()) return null;
+  const target = encodeURIComponent(window.location.href);
+  const ref = encodeURIComponent(
+    `${window.location.protocol}//${window.location.host}`,
+  );
+  return `https://phantom.app/ul/browse/${target}?ref=${ref}`;
+}
+
 let _connected: WalletAdapter | null = null;
 
 function adapterFor(provider: PhantomProvider, pubkey: string): WalletAdapter {

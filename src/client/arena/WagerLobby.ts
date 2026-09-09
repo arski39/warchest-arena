@@ -5,7 +5,11 @@ import { formatStake, winnerPayout } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
 import "../components/baseComponents/Button";
-import { connectWallet, getConnectedWallet } from "./WalletProvider";
+import {
+  connectWallet,
+  getConnectedWallet,
+  phantomBrowseLink,
+} from "./WalletProvider";
 import { joinMatchOnChain } from "./onchainJoin";
 import { signAuthMessage } from "./walletAuth";
 
@@ -66,6 +70,20 @@ export class WagerLobby extends LitElement {
   }
 
   private async handleConnect() {
+    // [ARENA] On a phone outside Phantom's in-app browser there is no provider
+    // to connect to, and connectWallet()'s "install Phantom" is the wrong
+    // answer for someone who has the app.
+    //
+    // Deliberately NOT the deeplink the sign-in button uses. Phantom's browser
+    // is a separate context with its own session, so following it from here
+    // would land them back on this lobby URL as a NEW client while the client
+    // they are looking at is still connected -- two seats of a duel taken by
+    // one person, and an escrow that can never fill honestly. Telling them to
+    // reopen the site in Phantom costs a restart and cannot corrupt a lobby.
+    if (phantomBrowseLink() !== null) {
+      this.error = translateText("wager_lobby.error_mobile_no_wallet");
+      return;
+    }
     this.busy = true;
     try {
       const wallet = await connectWallet();
