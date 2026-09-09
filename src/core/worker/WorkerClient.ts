@@ -85,7 +85,40 @@ export class WorkerClient {
         if (message.type === "initialized") {
           this.isInitialized = true;
           resolve();
+          return;
         }
+        // [ARENA] The worker told us why it failed -- surface that, rather
+        // than sitting out the timeout below and reporting nothing.
+        if (message.type === "init_error") {
+          // The stack is appended rather than passed as `cause`: this repo's
+          // TS lib target predates ErrorOptions, and a worker stack is only
+          // useful if it is actually printed.
+          reject(
+            new Error(
+              `Game worker failed to initialize: ${message.message}` +
+                (message.stack
+                  ? `
+${message.stack}`
+                  : ""),
+            ),
+          );
+        }
+      });
+
+      // [ARENA] A worker that dies outright -- a script that will not parse, an
+      // uncaught throw, an out-of-memory kill -- posts no message at all, so
+      // without this listener it too became a silent 60-second timeout. Note
+      // `error` does not fire for a rejected promise inside the worker; that is
+      // what init_error above is for. Both paths are needed.
+      worker.addEventListener("error", (event: ErrorEvent) => {
+        if (this.isInitialized) return;
+        reject(
+          new Error(
+            `Game worker crashed during initialization: ${
+              event.message || "no error message"
+            }`,
+          ),
+        );
       });
 
       worker.postMessage({
@@ -99,7 +132,13 @@ export class WorkerClient {
       setTimeout(() => {
         if (!this.isInitialized) {
           this.messageHandlers.delete(messageId);
-          reject(new Error("Worker initialization timeout"));
+          // [ARENA] Reaching this now means the worker really did go quiet for
+          // 60s -- not merely that it failed, which is what it used to mean.
+          reject(
+            new Error(
+              "Game worker did not respond within 60s (no error was reported)",
+            ),
+          );
         }
       }, 60000);
     });

@@ -13,6 +13,8 @@ import { ClientID, GameStartInfo, Turn } from "../Schemas";
 export type WorkerMessageType =
   | "init"
   | "initialized"
+  // [ARENA] See InitErrorMessage.
+  | "init_error"
   | "turn"
   | "game_update"
   | "game_update_batch"
@@ -52,6 +54,28 @@ export interface TurnMessage extends BaseWorkerMessage {
 // Messages from worker to main thread
 export interface InitializedMessage extends BaseWorkerMessage {
   type: "initialized";
+}
+
+/**
+ * [ARENA] Why the worker failed to initialize.
+ *
+ * Without this every init failure was indistinguishable: `Worker.worker.ts`
+ * assigned the `createGameRunner` promise without a `.catch()`, and
+ * `WorkerClient.initialize()` listened for `message` and never `error` -- so a
+ * rejected map fetch, a bad GameConfig and a thrown terrain parser all
+ * produced the same thing, which was nothing at all, followed 60 seconds later
+ * by "Worker initialization timeout". That message says the worker never
+ * answered; it has never said why, which made a real production failure
+ * undiagnosable from the outside.
+ *
+ * Carries strings rather than the Error: a structured-clone of an Error keeps
+ * `message` and `stack` but silently drops any subclass fields, so flattening
+ * here is honest about what survives the postMessage boundary.
+ */
+export interface InitErrorMessage extends BaseWorkerMessage {
+  type: "init_error";
+  message: string;
+  stack?: string;
 }
 
 export interface GameUpdateMessage extends BaseWorkerMessage {
@@ -151,6 +175,7 @@ export type MainThreadMessage =
 // Message send from worker
 export type WorkerMessage =
   | InitializedMessage
+  | InitErrorMessage
   | GameUpdateMessage
   | GameUpdateBatchMessage
   | GameErrorMessage

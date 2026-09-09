@@ -1,5 +1,11 @@
 // Framework-agnostic Solana wallet provider.
-// Detects injected wallets via the Wallet Standard or legacy Phantom injection.
+// Detects Phantom's injected provider ONLY -- `window.phantom.solana`, falling
+// back to the legacy `window.solana`. It does NOT implement Wallet Standard
+// discovery, and an earlier version of this comment wrongly claimed it did.
+// That matters twice over: Solflare and Backpack are invisible here even on
+// desktop, and Mobile Wallet Adapter -- the fix for mobile staking without
+// Phantom's in-app browser -- registers itself AS a Wallet Standard wallet, so
+// discovery is its prerequisite rather than a tidy-up. See `[I]` in the plan.
 // All wagered-game UI imports from here rather than touching wallet SDKs directly.
 
 import type { Transaction } from "@solana/web3.js";

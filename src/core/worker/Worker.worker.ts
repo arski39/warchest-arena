@@ -4,6 +4,7 @@ import { ErrorUpdate, GameUpdateViewData } from "../game/GameUpdates";
 import { createGameRunner, GameRunner } from "../GameRunner";
 import {
   AttackClusteredPositionsResultMessage,
+  InitErrorMessage,
   InitializedMessage,
   MainThreadMessage,
   PlayerActionsResultMessage,
@@ -17,6 +18,27 @@ import {
 const ctx: Worker = self as any;
 globalThis.__ASSET_MANIFEST__ = __ASSET_MANIFEST__;
 let gameRunner: Promise<GameRunner> | null = null;
+
+/**
+ * [ARENA] Tell the main thread why init failed, and log it worker-side.
+ *
+ * Both halves matter: the message is what the player sees instead of a bare
+ * timeout, and the console line is what survives when the tab is closed before
+ * anyone reads the screen.
+ *
+ * Sends strings rather than the Error itself -- structured clone preserves
+ * `message` and `stack` but drops subclass fields silently, so flattening here
+ * is honest about what actually crosses the boundary.
+ */
+function reportInitError(id: string | undefined, error: unknown): void {
+  console.error("Failed to initialize game runner:", error);
+  sendMessage({
+    type: "init_error",
+    id,
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  } as InitErrorMessage);
+}
 const mapLoader = new FetchGameMapLoader((path) => assetUrl(`maps/${path}`));
 // Yield threshold; not a backlog cap. Used to avoid monopolizing the worker task
 // and flooding the main thread with messages during catch-up.
@@ -158,9 +180,27 @@ ctx.addEventListener("message", async (e: MessageEvent<MainThreadMessage>) => {
           } as InitializedMessage);
           return gr;
         });
+        // [ARENA] Report an async failure instead of swallowing it.
+        //
+        // The try/catch around this only ever caught a SYNCHRONOUS throw --
+        // everything that actually fails here happens inside the promise (the
+        // map fetch, the terrain parse, config construction), and a rejection
+        // with no handler left the main thread waiting out its full 60-second
+        // timeout with no idea why. That is how a real production failure
+        // reported itself as "Worker initialization timeout" and nothing else.
+        //
+        // The catch is attached to a throwaway chain rather than reassigning
+        // gameRunner: the value awaited for turns must stay the original
+        // promise, or a failed init would resolve to undefined here and every
+        // later `gr.addTurn` would throw far away from the cause.
+        void gameRunner.catch((error: unknown) => {
+          reportInitError(message.id, error);
+        });
       } catch (error) {
-        console.error("Failed to initialize game runner:", error);
-        throw error;
+        // A synchronous throw is the same failure as far as the caller is
+        // concerned, so it takes the same path rather than an unhandled
+        // `throw` that the main thread cannot see either.
+        reportInitError(message.id, error);
       }
       break;
 
