@@ -114,6 +114,39 @@ describe("[ARENA] wager stake prompt", () => {
     expect(el.textContent).toContain("100 ARENA");
   });
 
+  it("says what backing out costs, on the prompt itself", async () => {
+    // Signing is the irreversible half — the stake is in the vault whatever
+    // the browser does next — so the one screen that can still change a
+    // player's mind is this one, not the waiting room behind it. Both halves
+    // are asserted because they are two different moments: an unfilled lobby
+    // refunds, a filled one forfeits.
+    //
+    // Keys, not English: translateText returns the key uninitialised, which is
+    // how the rest of this suite reads translated markers.
+    const el = await render(wagerInfo());
+
+    expect(el.textContent).toContain("wager_lobby.refund_notice");
+    expect(el.textContent).toContain("wager_lobby.forfeit_notice");
+  });
+
+  it("puts the disclaimer above the button that spends the money", async () => {
+    // Below the button it is a disclaimer nobody reads before deciding, which
+    // is the same as not having one. Position is the whole point of the
+    // change, so it is what this asserts.
+    const el = await render(wagerInfo());
+
+    const notice = [...el.querySelectorAll("p")].find((p) =>
+      (p.textContent ?? "").includes("wager_lobby.refund_notice"),
+    );
+    const button = el.querySelector("o-button");
+    expect(notice).toBeDefined();
+    expect(button).not.toBeNull();
+    expect(
+      notice!.compareDocumentPosition(button!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("renders nothing without a wager", async () => {
     await import("../../src/client/arena/WagerLobby");
     const el = document.createElement("arena-wager-lobby");

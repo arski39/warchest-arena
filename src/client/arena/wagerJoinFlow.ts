@@ -27,8 +27,13 @@ export function promptWagerJoin(
     inset: "0",
     zIndex: "10000",
     display: "flex",
-    alignItems: "center",
+    // [ARENA] `margin: auto` on the panel rather than `align-items: center`
+    // here. A centred flex item that is taller than its container has its
+    // overflowing top clipped and cannot be scrolled back into view, and this
+    // panel is the one screen a player must be able to read in full before
+    // signing. Auto margins centre without that failure.
     justifyContent: "center",
+    overflowY: "auto",
     background: "rgba(0, 0, 0, 0.72)",
     // Matches the scrim the rest of the app uses (JoinLobbyModal's
     // `backdrop-blur-md`). Inline rather than a Tailwind class because this
@@ -40,6 +45,7 @@ export function promptWagerJoin(
   const panel = document.createElement("arena-wager-lobby") as WagerLobby;
   panel.wager = wager;
   panel.gameId = gameId;
+  panel.style.margin = "auto";
   overlay.appendChild(panel);
 
   return new Promise<WagerJoinedDetail | null>((resolve) => {

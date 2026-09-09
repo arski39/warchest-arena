@@ -189,6 +189,36 @@ export class WagerLobby extends LitElement {
           ${translateText("wager_lobby.description")}
         </p>
 
+        <!-- [ARENA] What backing out costs, said before the signature rather
+             than discovered after it. Signing is the irreversible half: the
+             stake is in the vault whatever the browser does next, and the only
+             thing that decides whether it comes back is whether the lobby
+             filled. Two sentences because they are two different moments —
+             leaving an unfilled lobby is free, leaving a filled one forfeits —
+             and the switch happens when the LAST seat stakes, which this
+             screen cannot show.
+
+             Brighter than the description above on purpose. That paragraph
+             explains the mechanism; this one is the only thing here that
+             changes what a player would do.
+
+             Deliberately carries no time estimate. The same prompt serves a
+             listed duel (cancelled at HOSTED_LOBBY_AUTO_START_MS, ~5 min) and
+             a hand-made private wagered lobby with no armed timer (up to
+             MAX_GAME_DURATION_MS, 3 h), so any number stated here would be a
+             promise broken for one of them. -->
+        <div
+          class="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5
+                 text-xs leading-relaxed"
+        >
+          <p class="text-white/70">
+            ${translateText("wager_lobby.refund_notice")}
+          </p>
+          <p class="mt-2 text-white/50">
+            ${translateText("wager_lobby.forfeit_notice")}
+          </p>
+        </div>
+
         ${this.walletAddress
           ? html`
               <div class="mt-4 font-mono text-xs text-white/40">
