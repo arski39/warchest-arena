@@ -149,6 +149,11 @@ export class HostLobbyModal extends BaseModal {
   // screen would mean a second copy of the waiting room, the client list, the
   // start timer and the share link, all of which already live here.
   @state() private duelPreset: boolean = false;
+  // [ARENA] The tier the duel panel chose, and whether to advertise the lobby
+  // so an opponent can find it. Null/false for a hand-made 1v1 from the host
+  // screen, which stays a share-a-link lobby.
+  private duelTier: number | null = null;
+  private duelShouldList: boolean = false;
   @state() private wagerRequestInFlight: boolean = false;
   @state() private wagerError: string | null = null;
 
@@ -483,6 +488,36 @@ export class HostLobbyModal extends BaseModal {
     this.wagerPublicLobbies = state.publicLobbies === true;
     this.wager = state.wager ?? null;
     this.wagerOptions = state.options ?? null;
+  }
+
+  // [ARENA] The duel panel's non-interactive path through the same endpoints
+  // the host screen drives by hand. Failures are surfaced but never fatal: a
+  // duel that could not be listed is still a perfectly good lobby with a
+  // shareable link, and refusing the whole thing would be worse.
+  private async attachDuelWager(tier: number): Promise<void> {
+    const result = await setLobbyWager(this.lobbyId, { tier, maxPlayers: 2 });
+    if (!result.ok) {
+      const key = `host_modal.wager_error_${result.error ?? "generic"}`;
+      const translated = translateText(key);
+      this.wagerError =
+        translated === key
+          ? translateText("host_modal.wager_error_generic")
+          : translated;
+      return;
+    }
+    this.wager = result.wager;
+    this.wagerTier = tier;
+    if (!this.duelShouldList) return;
+
+    const listed = await setLobbyListed(this.lobbyId, true);
+    if (listed.ok) {
+      this.publiclyListed = true;
+      return;
+    }
+    // The likeliest cause is ARENA_PUBLIC_WAGER_LOBBIES being off or its replay
+    // probe having failed, in which case a wagered lobby may not be advertised
+    // at all. Nobody will stumble on this duel, so say so.
+    this.wagerError = translateText("duel.error_not_listed");
   }
 
   private handleAttachWager = async () => {
@@ -916,6 +951,8 @@ export class HostLobbyModal extends BaseModal {
       this.duelPreset = args.preset === "duel";
       if (this.duelPreset) {
         this.wagerMaxPlayers = 2;
+        this.duelTier = typeof args.tier === "number" ? args.tier : null;
+        this.duelShouldList = args.list === true;
       }
     }
     this.startLobbyUpdates();
@@ -954,6 +991,18 @@ export class HostLobbyModal extends BaseModal {
         }
         crazyGamesSDK.showInviteButton(this.lobbyId);
         void this.loadWagerState(); // [ARENA]
+
+        // [ARENA] A duel attaches its stake and advertises itself before
+        // anyone joins. Done here rather than through handleAttachWager so the
+        // escrow already exists when the host's join-lobby fires below — the
+        // stake gate then runs on that first join instead of needing the
+        // second one the manual flow re-dispatches. It also means POST /wager
+        // sees a lobby with nobody in it, which is the state it wants:
+        // wager_lobby_not_empty exists because anyone who joined before the
+        // escrow cannot be made to stake retroactively.
+        if (this.duelPreset && this.duelTier !== null) {
+          await this.attachDuelWager(this.duelTier);
+        }
 
         // Now that we have the id, build and copy the share link. If lobby
         // creation fails, the catch below clears the clipboard.
@@ -1087,6 +1136,8 @@ export class HostLobbyModal extends BaseModal {
     // [ARENA] Cleared with the rest of the lobby state, so a plain "Create
     // Lobby" after a duel is not silently still capped at two seats.
     this.duelPreset = false;
+    this.duelTier = null;
+    this.duelShouldList = false;
     this.wagerMaxPlayers = 16;
     this.lobbyId = "";
     this.clients = [];

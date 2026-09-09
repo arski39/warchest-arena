@@ -118,19 +118,25 @@ describe("[ARENA] home page mode order", () => {
     ]);
   });
 
-  it("opens the host lobby with the duel preset", async () => {
-    // The behaviour, not just the label: a duel is an ordinary two-seat wagered
-    // lobby, and `preset: "duel"` is what caps and locks the seat count. Losing
-    // the argument would silently give a 16-seat escrow to a mode called 1v1.
-    const open = vi.fn();
-    const modal = document.createElement("host-lobby-modal");
-    (modal as unknown as { open: unknown }).open = open;
-    document.body.appendChild(modal);
+  it("opens the duel panel, not the host lobby", async () => {
+    // 1v1 is matchmaking, not lobby creation: it opens the tier picker, which
+    // then either joins an open duel at that stake or creates one. Wiring it
+    // straight to the host lobby — as it briefly was — makes the site's primary
+    // mode a create-and-share-a-link button, which is not a mode.
+    const openDuel = vi.fn();
+    const openHost = vi.fn();
+    const duel = document.createElement("arena-duel-panel");
+    (duel as unknown as { open: unknown }).open = openDuel;
+    document.body.appendChild(duel);
+    const host = document.createElement("host-lobby-modal");
+    (host as unknown as { open: unknown }).open = openHost;
+    document.body.appendChild(host);
 
     const el = mount();
     await el.updateComplete;
     el.querySelector("button")!.click();
 
-    expect(open).toHaveBeenCalledWith({ preset: "duel" });
+    expect(openDuel).toHaveBeenCalledTimes(1);
+    expect(openHost).not.toHaveBeenCalled();
   });
 });

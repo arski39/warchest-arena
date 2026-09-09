@@ -67,6 +67,7 @@ import "./UsernameInput";
 import { genAnonUsername, UsernameInput } from "./UsernameInput";
 import { incrementGamesPlayed, isInIframe, translateText } from "./Utils";
 import { isReplayShellHost } from "./VersionedReplay";
+import "./arena/DuelPanel"; // [ARENA] registers <arena-duel-panel>
 import "./components/MarketingConsentToast";
 import { installSafariPinchZoomBlocker } from "./utilities/DisableSafariPinchZoom";
 

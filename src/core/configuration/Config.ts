@@ -45,6 +45,13 @@ declare global {
       // off. The client needs the *resolved* value, not its own guess at it,
       // or it would prompt for a signature the server is about to reject.
       arenaDevBypass?: boolean;
+      // [ARENA] The ticker every stake is denominated in, so the duel tier
+      // picker can say "1 WARC" before any escrow exists. There is no endpoint
+      // that answers this without a game id — `wagerOptions` rides on
+      // GET /api/game/:id — and a picker showing bare numbers does not tell a
+      // player what they are about to stake. Display only; the server derives
+      // the actual fee from the tier.
+      arenaStakeSymbol?: string;
     };
   }
 }

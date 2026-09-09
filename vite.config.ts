@@ -130,6 +130,7 @@ export default defineConfig(({ mode }) => {
     // server stays the only thing that decides. It cannot leak past dev:
     // createHtmlPlugin is only registered when !isProduction.
     arenaDevBypass: JSON.stringify(env.ARENA_DEV_BYPASS === "true"),
+    arenaStakeSymbol: JSON.stringify(env.ARENA_STAKE_SYMBOL ?? ""),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(

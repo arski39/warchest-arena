@@ -10,6 +10,7 @@ import {
   Trios,
 } from "../core/game/Game";
 import { PublicGameInfo, PublicGames } from "../core/Schemas";
+import { DuelPanel } from "./arena/DuelPanel";
 import "./components/IOSAddToHomeScreenBanner";
 import { HostLobbyModal } from "./HostLobbyModal";
 import { JoinLobbyModal } from "./JoinLobbyModal";
@@ -266,9 +267,7 @@ export class GameModeSelector extends LitElement {
   // implementation.
   private openDuel = () => {
     if (!this.validateUsername()) return;
-    (document.querySelector("host-lobby-modal") as HostLobbyModal)?.open({
-      preset: "duel",
-    });
+    (document.querySelector("arena-duel-panel") as DuelPanel)?.open();
   };
 
   private openJoinLobby = () => {

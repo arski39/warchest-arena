@@ -98,7 +98,8 @@
         jwtAudience: <%- jwtAudience %>,
         instanceId: <%- instanceId %>,
         sourceRepoUrl: <%- sourceRepoUrl %>,
-        arenaDevBypass: <%- arenaDevBypass %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
+        arenaDevBypass: <%- arenaDevBypass %>,
+        arenaStakeSymbol: <%- arenaStakeSymbol %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
       };
       document.documentElement.style.setProperty(
         "--background-image-url",
@@ -201,6 +202,13 @@
           inline
           class="hidden w-full h-full page-content relative z-50"
         ></single-player-modal>
+        <!-- [ARENA] The 1v1 duel tier picker. An inline page like the others,
+             so window.showPage swaps it in the same way. -->
+        <arena-duel-panel
+          id="page-duel"
+          inline
+          class="hidden w-full h-full page-content relative z-50"
+        ></arena-duel-panel>
         <host-lobby-modal
           id="page-host-lobby"
           inline

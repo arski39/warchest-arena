@@ -49,6 +49,7 @@ export class ClientEnv {
       sourceRepoUrl: bc.sourceRepoUrl,
       // [ARENA] Absent means off — never assume a bypass we were not told about.
       arenaDevBypass: bc.arenaDevBypass ?? false,
+      arenaStakeSymbol: bc.arenaStakeSymbol ?? "",
     };
     return ClientEnv.values;
   }
@@ -91,6 +92,13 @@ export class ClientEnv {
    * would prompt the wallet for a signature the server then rejects. Stage 6's
    * rule — never ask anyone to sign something that cannot be accepted.
    */
+  // [ARENA] Display only — empty when the operator set no symbol. Callers must
+  // fall back to the mint address rather than showing a bare number, which is
+  // how someone stakes without knowing in what.
+  static arenaStakeSymbol(): string {
+    return ClientEnv.get().arenaStakeSymbol;
+  }
+
   static arenaDevBypass(): boolean {
     return ClientEnv.get().arenaDevBypass;
   }
@@ -244,4 +252,5 @@ export interface ClientEnvValues {
   serverHost?: string;
   sourceRepoUrl?: string;
   arenaDevBypass: boolean;
+  arenaStakeSymbol: string;
 }

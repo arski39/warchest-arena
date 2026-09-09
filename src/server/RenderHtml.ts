@@ -2,7 +2,8 @@ import ejs from "ejs";
 import type { Response } from "express";
 import fs from "fs/promises";
 import { buildAssetUrl } from "../core/AssetUrls";
-import { devBypassEnabled } from "./arena/devBypass"; // [ARENA]
+import { devBypassEnabled } from "./arena/devBypass";
+import { stakeMint } from "./arena/stakeMint"; // [ARENA]
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { getRuntimeAssetManifest } from "./RuntimeAssetManifest";
 import { ServerEnv } from "./ServerEnv";
@@ -36,6 +37,9 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
     siteName: ServerEnv.siteName(),
     sourceRepoUrl: JSON.stringify(ServerEnv.sourceRepoUrl()),
     arenaDevBypass: JSON.stringify(devBypassEnabled()),
+    // [ARENA] The resolved symbol, not the raw env var: stakeMint() validates
+    // it against SYMBOL_PATTERN at boot, and this value reaches every browser.
+    arenaStakeSymbol: JSON.stringify(stakeMint()?.symbol ?? ""),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(
