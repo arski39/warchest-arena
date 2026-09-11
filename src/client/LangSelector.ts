@@ -252,6 +252,12 @@ export class LangSelector extends LitElement {
       "steam-wishlist",
       "steam-wishlist-button",
       "streaming-now",
+      // [ARENA] Lit components render once on mount, and translations load
+      // asynchronously after that. This list is what gets re-rendered when
+      // they arrive — a component missing from it shows raw keys forever.
+      // Only bites components mounted at page load; a modal opened later
+      // renders after translations are in and looks fine either way.
+      "wallet-balance-card",
     ];
 
     // [ARENA] The title is no longer translated -- it is the site name, set

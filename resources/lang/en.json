@@ -1811,8 +1811,8 @@
     "winner_takes": "Winner receives"
   },
   "wallet_card": {
+    "connect_hint": "Signs you in and shows what you can stake.",
     "copied": "Copied",
-    "not_connected": "Connect a wallet from the account menu to see your balance.",
     "refresh": "Refresh",
     "stale": "Could not refresh — showing the last known balance.",
     "title": "Wallet"

@@ -31,7 +31,7 @@ import { customElement, state } from "lit/decorators.js";
 import { formatStake } from "../../core/arena/stakeTiers";
 import { ClientEnv } from "../ClientEnv";
 import { translateText } from "../Utils";
-import { getConnectedWallet } from "./WalletProvider";
+import { getConnectedWallet, phantomBrowseLink } from "./WalletProvider";
 
 /** Fixed by the protocol. */
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -52,6 +52,8 @@ export class WalletBalanceCard extends LitElement {
   @state() private busy = false;
   @state() private stale = false;
   @state() private copied = false;
+  @state() private connecting = false;
+  @state() private connectError: string | null = null;
 
   private timer: number | null = null;
 
@@ -160,6 +162,58 @@ export class WalletBalanceCard extends LitElement {
     return `${whole}.${fraction.slice(0, 4)}`;
   }
 
+  /**
+   * Connect a wallet and sign in, from the menu.
+   *
+   * Deliberately the same sequence as AccountModal.handleWalletLogin, including
+   * the reload: signing in swaps `sub`, hence the persistentID, so half the
+   * page would otherwise still be showing the previous identity. Two entry
+   * points to one flow is fine; two implementations of it would not be.
+   *
+   * Safe here for the reason wallet login is menu-only in the first place —
+   * this card only exists on the menu, where nothing is bound to the current
+   * session yet. walletLogin() re-checks that itself and refuses if a game or
+   * a stake prompt is open, so the rule is enforced in one place regardless.
+   */
+  private handleConnect = async (): Promise<void> => {
+    if (this.connecting) return;
+    // A mobile tab cannot reach the Phantom app at all; hand off to its
+    // in-app browser instead of throwing "install Phantom" at someone who
+    // has it installed.
+    const deeplink = phantomBrowseLink();
+    if (deeplink !== null) {
+      window.location.href = deeplink;
+      return;
+    }
+    this.connecting = true;
+    this.connectError = null;
+    try {
+      // Lazily imported: the sign-in path should not be in front of a player
+      // who never connects a wallet.
+      const { walletLogin } = await import("./walletLogin");
+      await walletLogin();
+      window.location.reload();
+    } catch (e) {
+      const reason =
+        e instanceof Error && e.name === "WalletLoginError"
+          ? (e as { reason?: string }).reason
+          : undefined;
+      if (reason === "rejected") {
+        // They changed their mind at the wallet prompt. Not a fault.
+        this.connectError = null;
+      } else if (reason === "no-wallet") {
+        this.connectError = translateText("account_modal.wallet_no_extension");
+      } else {
+        this.connectError =
+          e instanceof Error
+            ? e.message
+            : translateText("account_modal.wallet_login_failed");
+      }
+    } finally {
+      this.connecting = false;
+    }
+  };
+
   private handleCopy = () => {
     if (this.address === null) return;
     void navigator.clipboard?.writeText(this.address);
@@ -207,9 +261,29 @@ export class WalletBalanceCard extends LitElement {
         </div>
 
         ${this.address === null
-          ? html`<p class="mt-3 text-sm text-white/40">
-              ${translateText("wallet_card.not_connected")}
-            </p>`
+          ? html`<div class="mt-3 flex flex-col gap-2">
+              <button
+                @click=${this.handleConnect}
+                ?disabled=${this.connecting}
+                class="w-full rounded-lg bg-malibu-blue px-4 py-3 font-bold tracking-wide text-white transition-colors hover:bg-aquarius disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ${this.connecting
+                  ? translateText("account_modal.wallet_connecting")
+                  : phantomBrowseLink() !== null
+                    ? translateText("account_modal.wallet_open_phantom")
+                    : translateText("account_modal.wallet_login")}
+              </button>
+              <!-- The same strings the account modal uses, not copies of them:
+                   one action should not have two wordings that can drift. -->
+              <p class="text-center text-[10px] leading-relaxed text-white/35">
+                ${translateText("wallet_card.connect_hint")}
+              </p>
+              ${this.connectError !== null
+                ? html`<p class="text-center text-xs text-red-400">
+                    ${this.connectError}
+                  </p>`
+                : null}
+            </div>`
           : html`
               <!-- Amounts render as data, outside the translated string: a
                    missing translation must not be able to hide a balance. -->
