@@ -40,6 +40,7 @@ import { ClientEnv } from "../ClientEnv";
 import { BaseModal } from "../components/BaseModal";
 import { modalHeader } from "../components/ui/ModalHeader";
 import type { HostLobbyModal } from "../HostLobbyModal";
+import type { JoinLobbyModal } from "../JoinLobbyModal";
 import type { JoinLobbyEvent } from "../Main";
 import { translateText } from "../Utils";
 
@@ -123,15 +124,39 @@ export class DuelPanel extends BaseModal {
 
     const existing = this.openDuelAt(this.tier);
     if (existing !== null) {
-      // The same path the lobby browser uses for a listed lobby, so the stake
-      // gate in Main.resolveWagerJoin runs unchanged — `source: "private"` is
-      // what it keys on.
-      this.close();
+      // Hand off to the join modal FIRST, then join. It is the waiting room
+      // every other private join already lands in, and opening it is what
+      // gives the player something to look at while the stake prompt resolves
+      // and the escrow fills.
+      //
+      // This used to close() and dispatch, and nothing opened: Main only opens
+      // the join modal for `source: "public"`, and the lobby-browser path gets
+      // away with it because that modal is already open. So the one entry
+      // point to the site's primary mode dropped the player back on the menu
+      // to watch nothing happen until the match loaded.
+      //
+      // Opening it also closes this panel -- showPage() closes the visible
+      // page-modal properly on the way -- so there is no close() here to race
+      // it.
+      const join = document.querySelector(
+        "join-lobby-modal",
+      ) as JoinLobbyModal | null;
+      if (join === null) {
+        this.error = translateText("duel.error_generic");
+        this.busy = false;
+        return;
+      }
+      // lobbyInfo present means "someone else is joining this for me": onOpen
+      // tracks the lobby but does NOT auto-join, leaving the join to the event
+      // below and the stake gate in Main.resolveWagerJoin unchanged --
+      // `source: "private"` is what it keys on.
+      join.open({ lobbyId: existing.gameID, lobbyInfo: existing });
       this.dispatchEvent(
         new CustomEvent("join-lobby", {
           detail: {
             gameID: existing.gameID,
             source: "private",
+            publicLobbyInfo: existing,
           } as JoinLobbyEvent,
           bubbles: true,
           composed: true,

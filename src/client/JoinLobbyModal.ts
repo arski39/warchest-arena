@@ -36,6 +36,7 @@ import { terrainMapFileLoader } from "./TerrainMapFileLoader";
 import { SendSpectateEvent } from "./Transport";
 import { normaliseMapKey } from "./Utils";
 import { isReplayShellHost, versionedReplayUrl } from "./VersionedReplay";
+import { renderDuelWaitingRoom, type DuelStake } from "./arena/duelWaitingRoom"; // [ARENA]
 import { BaseModal } from "./components/BaseModal";
 import "./components/CopyButton";
 import "./components/LobbyConfigItem";
@@ -67,6 +68,12 @@ export class JoinLobbyModal extends BaseModal {
   // "all". A string rather than a number because entryFee is a u64 — see
   // WagerInfoSchema — and it is only ever compared, never arithmetic.
   @state() private stakeFilter: string | null = null;
+  // [ARENA] The escrow of the lobby currently being tracked, so the duel
+  // waiting room can show what is at stake. Structural (see DuelStake) plus the
+  // seat count, because lobby_info carries a WagerInfo while the lobby
+  // broadcast carries a PublicWagerSummary and either may arrive first.
+  @state() private trackedWager: (DuelStake & { maxPlayers: number }) | null =
+    null;
 
   private leaveLobbyOnClose = true;
   private countdownTimerId: number | null = null;
@@ -160,6 +167,49 @@ export class JoinLobbyModal extends BaseModal {
     `;
   }
 
+  /**
+   * [ARENA] The joiner's half of the duel waiting room.
+   *
+   * The pot and the seats come from the shared view, so both players see the
+   * same screen. The footer does not: the host may cancel an unfilled duel and
+   * take the refund, and the joiner may not -- they are the one who fills it,
+   * and the escrow flips to InProgress the moment their stake lands, after
+   * which cancel_match refuses for 24 hours. Offering "cancel and refund" here
+   * would be offering something the chain will not do.
+   */
+  private renderDuelBody(secondsRemaining: number | null): TemplateResult {
+    if (this.isConnecting) {
+      return html`
+        <div
+          class="min-h-[240px] flex flex-col items-center justify-center gap-4"
+        >
+          <div
+            class="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin"
+          ></div>
+          <p class="text-center text-white/80 text-sm">
+            ${translateText("public_lobby.connecting")}
+          </p>
+        </div>
+      `;
+    }
+    return renderDuelWaitingRoom({
+      // Seats, not connections: a spectator holds none, and a duel has two.
+      occupants: this.players.filter((p) => !p.spectator),
+      wager: this.trackedWager,
+      footer: html`
+        <p class="text-white/70 text-sm text-center">
+          ${secondsRemaining === null
+            ? translateText("duel.waiting_opponent")
+            : secondsRemaining > 0
+              ? translateText("duel.starting_in", {
+                  time: renderDuration(secondsRemaining),
+                })
+              : translateText("duel.starting_soon")}
+        </p>
+      `,
+    });
+  }
+
   protected renderBody() {
     // Pre-join state: show lobby ID input form
     if (!this.currentLobbyId) {
@@ -174,6 +224,16 @@ export class JoinLobbyModal extends BaseModal {
             this.serverTimeOffset,
           )
         : null;
+    // [ARENA] A duel gets the duel screen, the same one its opponent is looking
+    // at in HostLobbyModal. Before this, joining a 1v1 from the duel panel put
+    // the player back on the MENU: the panel closed itself, dispatched
+    // join-lobby, and Main only opens this modal for `source: "public"` -- so
+    // between staking and the match loading there was nothing on screen at all
+    // while the escrow filled and the server armed its countdown.
+    if (this.trackedWager?.maxPlayers === 2) {
+      return this.renderDuelBody(secondsRemaining);
+    }
+
     const statusLabel =
       secondsRemaining === null
         ? this.isPrivateLobby()
@@ -624,6 +684,7 @@ export class JoinLobbyModal extends BaseModal {
     this.lobbyCreatorClientID = null;
     this.isConnecting = true;
     this.handledJoinTimeout = false;
+    this.trackedWager = null; // [ARENA]
     this.startLobbyUpdates();
     if (lobbyInfo) {
       this.updateFromLobby(lobbyInfo);
@@ -639,6 +700,7 @@ export class JoinLobbyModal extends BaseModal {
     this.currentLobbyId = "";
     this.currentClientID = "";
     this.isConnecting = false;
+    this.trackedWager = null; // [ARENA]
   }
 
   private leaveLobby() {
@@ -1058,6 +1120,13 @@ export class JoinLobbyModal extends BaseModal {
       "lobbyCreatorClientID" in lobby
         ? (lobby.lobbyCreatorClientID ?? null)
         : null;
+    // [ARENA] Absent on a free lobby, and absent from some updates of a wagered
+    // one, so only ever set -- never cleared here. resetTrackingState() and
+    // startTrackingLobby() own the clearing, because moving to a different
+    // lobby is the only thing that makes this stale.
+    if (lobby.wager !== undefined) {
+      this.trackedWager = lobby.wager;
+    }
   }
 
   private startLobbyUpdates() {

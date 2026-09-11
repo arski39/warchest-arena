@@ -48,6 +48,7 @@ describe("[ARENA] duel matchmaking", () => {
   let panel: DuelPanel;
   let joined: { gameID: string; source?: string }[];
   let hostOpened: Record<string, unknown>[];
+  let joinOpened: Record<string, unknown>[];
   // Braces, not a concise body: the concise form returns push()'s number, and
   // the cast to EventListener then fails because the types do not overlap.
   const onJoin = (e: CustomEvent): void => {
@@ -58,6 +59,7 @@ describe("[ARENA] duel matchmaking", () => {
     document.body.innerHTML = "";
     joined = [];
     hostOpened = [];
+    joinOpened = [];
 
     // The host lobby is the waiting room the create path hands off to.
     const host = document.createElement("host-lobby-modal");
@@ -65,6 +67,14 @@ describe("[ARENA] duel matchmaking", () => {
       args,
     ) => hostOpened.push(args);
     document.body.appendChild(host);
+
+    // ...and the join lobby is the waiting room the JOIN path hands off to.
+    // Without it the joiner is left on the menu; see the test below.
+    const join = document.createElement("join-lobby-modal");
+    (join as unknown as { open: (a: Record<string, unknown>) => void }).open = (
+      args,
+    ) => joinOpened.push(args);
+    document.body.appendChild(join);
 
     // Constructed, not createElement'd: an import used only in type positions
     // is erased, @customElement never runs, and every assertion below would
@@ -110,8 +120,34 @@ describe("[ARENA] duel matchmaking", () => {
     // source "private" is what Main.resolveWagerJoin keys on to run the stake
     // gate. Any other source and the player joins a wagered lobby without
     // staking, which the server then refuses on the socket.
-    expect(joined).toEqual([{ gameID: "opendueL1", source: "private" }]);
+    expect(joined).toEqual([
+      {
+        gameID: "opendueL1",
+        source: "private",
+        publicLobbyInfo: expect.objectContaining({ gameID: "opendueL1" }),
+      },
+    ]);
     expect(hostOpened).toEqual([]);
+  });
+
+  it("puts the joiner in the waiting room instead of back on the menu", async () => {
+    broadcast(lobbies(duelLobby({ gameID: "opendueL1", tier: 5 })));
+    await find(5);
+
+    // The regression this pins: the panel used to close itself and dispatch
+    // join-lobby, and nothing opened -- Main only opens the join modal for
+    // `source: "public"`. So the player staked and then watched the MENU while
+    // the escrow filled and the server armed its countdown, with no indication
+    // that they were in a match at all.
+    //
+    // lobbyInfo rides along because its presence is what tells the modal to
+    // track the lobby WITHOUT auto-joining it: the join is the event above.
+    expect(joinOpened).toEqual([
+      {
+        lobbyId: "opendueL1",
+        lobbyInfo: expect.objectContaining({ gameID: "opendueL1" }),
+      },
+    ]);
   });
 
   it("creates and advertises one when nobody is waiting", async () => {
@@ -175,6 +211,12 @@ describe("[ARENA] duel matchmaking", () => {
     );
     await find(5);
 
-    expect(joined).toEqual([{ gameID: "opendueL1", source: "private" }]);
+    expect(joined).toEqual([
+      {
+        gameID: "opendueL1",
+        source: "private",
+        publicLobbyInfo: expect.objectContaining({ gameID: "opendueL1" }),
+      },
+    ]);
   });
 });
