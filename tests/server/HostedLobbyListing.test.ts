@@ -233,13 +233,24 @@ describe("listed lobby auto-start", () => {
       { startDelay: 30 } as any,
       CREATOR,
     )!;
+    // [ARENA] The host has to be in it, and has to still be pinging. A listed
+    // lobby always has its host -- listing is something they do from inside it
+    // -- and both of phase()'s emptiness rules now bite on this five-minute
+    // jump: the 60s ping timeout drops a silent client, and an empty private
+    // lobby is closed EMPTY_LOBBY_TIMEOUT_MS later. A real client pings every
+    // few seconds, so keeping lastPing current is what makes fake time behave
+    // like a host who is actually sitting there. See EmptyLobbyReap.test.ts.
+    const host = makeClient("host", CREATOR, fakeWs());
+    game.joinClient(host);
     game.setListed(true);
 
     vi.setSystemTime(Date.now() + HOSTED_LOBBY_AUTO_START_MS - 1000);
+    host.lastPing = Date.now();
     gm.tick();
     expect(game.gameInfo().startsAt).toBeUndefined();
 
     vi.setSystemTime(Date.now() + 2000);
+    host.lastPing = Date.now();
     gm.tick();
     expect(game.gameInfo().startsAt).toBe(Date.now() + 30_000);
     // Still listed while the start countdown runs (the phase change on

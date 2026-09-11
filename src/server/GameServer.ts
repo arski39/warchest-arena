@@ -100,6 +100,11 @@ const KICK_REASON_MATCH_CANCELLED = "kick_reason.match_cancelled";
 // [ARENA] How long a filled wagered lobby waits before starting itself.
 export const WAGER_FULL_START_DELAY_MS = 5_000;
 
+// [ARENA] How long a private lobby may sit with nobody connected before it is
+// closed. Longer than the 60s ping timeout that empties it in the first place,
+// so a lobby is never reaped in the same breath as losing its last client.
+export const EMPTY_LOBBY_TIMEOUT_MS = 60_000;
+
 const KICK_REASON_WAGER_NOT_FULL = "kick_reason.wager_not_full";
 const KICK_REASON_TOO_MUCH_DATA = "kick_reason.too_much_data";
 
@@ -203,6 +208,12 @@ export class GameServer {
   // When the lobby was listed; drives the auto-start deadline. Cleared on
   // delist, so relisting starts a fresh deadline.
   private listedAt?: number;
+
+  // [ARENA] The last time anyone was connected to this lobby, used to reap a
+  // private lobby nobody is in. Starts at creation, which is the grace window
+  // the host gets to connect: create_game returns before the browser opens its
+  // socket, and the join goes through the Turnstile widget first.
+  private lastOccupiedAt = Date.now();
 
   // Featured lobbies: a label shown instead of the map name, an accent for the
   // row, and a longer auto-start deadline. Set once at create_game by an
@@ -1803,6 +1814,40 @@ export class GameServer {
 
     const noRecentPings = now > this.lastPingUpdate + 20 * 1000;
     const noActive = this.activeClients.length === 0;
+
+    // [ARENA] A private lobby nobody is connected to is finished, whatever the
+    // clock says. Without this the ONLY thing that reaped an abandoned lobby
+    // was handleClientDisconnect's host-left rule, which needs two things that
+    // are not guaranteed: a close event, and a client whose persistentID equals
+    // the creator's. Neither holds when a tab dies without the close frame
+    // arriving -- the client is then dropped by the ping timeout above, which
+    // runs no such check -- so the lobby stayed in GamePhase.Lobby, advertised
+    // in the browser with 0 players and holding its creator's one-listing
+    // quota, until maxGameDuration three hours later. Observed live.
+    //
+    // The window is generous because the empty state is normal at both ends of
+    // a lobby's life, and it is measured from the last time someone was here
+    // rather than from creation, so a host who reloads reconnects long inside
+    // it. Public lobbies are excluded deliberately: the master generates those
+    // ahead of time and they are SUPPOSED to sit empty waiting for players.
+    //
+    // Reporting Finished is all this does. GameManager.tick() calls end(),
+    // which for a lobby that never started routes to refundWageredLobby() --
+    // the one refund site. No second cancellation path.
+    if (
+      !this.isPublic() &&
+      !this.hasStarted() &&
+      noActive &&
+      now > this.lastOccupiedAt + EMPTY_LOBBY_TIMEOUT_MS
+    ) {
+      this.log.info("lobby empty past its grace window, closing", {
+        gameID: this.id,
+      });
+      return GamePhase.Finished;
+    }
+    if (!noActive) {
+      this.lastOccupiedAt = now;
+    }
 
     const lessThanLifetime = this.startsAt ? Date.now() < this.startsAt : true;
     if (
