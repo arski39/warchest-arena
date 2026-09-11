@@ -168,6 +168,10 @@ ctx.addEventListener("message", async (e: MessageEvent<MainThreadMessage>) => {
         // Set before createGameRunner so map fetches via mapLoader pick up the
         // CDN base. Workers have no `window`, so AssetUrls falls back to this.
         globalThis.__CDN_BASE__ = message.cdnBase;
+        // [ARENA] Set alongside it and for the same reason: with no CDN
+        // configured this is the only thing that makes a map URL absolute, and
+        // a blob worker cannot fetch a root-relative one.
+        globalThis.__ASSET_ORIGIN__ = message.assetOrigin;
         gameRunner = createGameRunner(
           message.gameStartInfo,
           message.clientID,

@@ -44,6 +44,10 @@ export interface InitMessage extends BaseWorkerMessage {
   gameStartInfo: GameStartInfo;
   clientID: ClientID | undefined;
   cdnBase: string;
+  // [ARENA] The page's origin, so the worker can build absolute asset URLs.
+  // It is a Blob worker, and a blob: URL cannot serve as a base for a
+  // root-relative fetch. See getAssetOrigin() in AssetUrls.ts.
+  assetOrigin: string;
 }
 
 export interface TurnMessage extends BaseWorkerMessage {

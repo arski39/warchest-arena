@@ -127,6 +127,7 @@ ${message.stack}`
         gameStartInfo: this.gameStartInfo,
         clientID: this.clientID,
         cdnBase: getCdnBase(),
+        assetOrigin: window.location.origin, // [ARENA]
       });
 
       setTimeout(() => {

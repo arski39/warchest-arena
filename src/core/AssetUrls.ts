@@ -48,10 +48,17 @@ function isAbsoluteUrl(path: string): boolean {
   return /^https?:\/\//i.test(path);
 }
 
+/**
+ * @param baseUrl  The CDN origin, when one is configured.
+ * @param originBase [ARENA] An origin to make an otherwise root-relative URL
+ *   absolute with. Empty — and therefore inert — everywhere a document exists;
+ *   see getAssetOrigin() for the one context that needs it.
+ */
 export function buildAssetUrl(
   path: string,
   assetManifest: AssetManifest = {},
   baseUrl: string = "",
+  originBase: string = "",
 ): string {
   if (isAbsoluteUrl(path)) {
     return path;
@@ -61,15 +68,19 @@ export function buildAssetUrl(
 
   const directUrl = assetManifest[normalizedPath];
   if (directUrl) {
-    return baseUrl ? `${baseUrl.replace(/\/+$/, "")}${directUrl}` : directUrl;
+    return baseUrl
+      ? `${baseUrl.replace(/\/+$/, "")}${directUrl}`
+      : `${originBase}${directUrl}`;
   }
 
-  return `/${encodeAssetPath(normalizedPath)}`;
+  return `${originBase}/${encodeAssetPath(normalizedPath)}`;
 }
 
 declare global {
   var __ASSET_MANIFEST__: AssetManifest | undefined;
   var __CDN_BASE__: string | undefined;
+  // [ARENA] See getAssetOrigin().
+  var __ASSET_ORIGIN__: string | undefined;
 }
 
 export function getAssetManifest(): AssetManifest {
@@ -96,8 +107,44 @@ export function getCdnBase(): string {
   return globalThis.__CDN_BASE__ ?? "";
 }
 
+/**
+ * [ARENA] The origin to hang a root-relative asset URL off, or "".
+ *
+ * Empty for anything with a document, because a page resolves "/x" itself and
+ * always has. It is non-empty in exactly one place: the game worker, which is
+ * instantiated from a same-origin **Blob** (`?worker&inline` in
+ * `WorkerClient.ts`) so that it can be served from a CDN. A blob: URL is not a
+ * hierarchical base, so inside that worker `fetch("/_assets/maps/world/
+ * manifest.<hash>.json")` does not resolve to the site — it throws
+ * `TypeError: Failed to parse URL`, before any request is made.
+ *
+ * That never surfaced upstream because their production build sets a real
+ * `CDN_BASE`, which already made every asset URL absolute. This deployment
+ * serves assets same-origin out of `static/` (`CDN_BASE=""` — see the deploy
+ * notes), so the CDN prefix that was quietly doing this job is not there, and
+ * **every wagered match failed to boot on every client**: game `Rbp2Lxnd`, and
+ * almost certainly `EE96ZrfK` before it, whose stakes then sat out the
+ * escrow's 24-hour timeout. A configuration upstream does not run, in a code
+ * path only a worker takes.
+ *
+ * Passed in over the init message rather than read from `self.location.origin`
+ * for the same reason `cdnBase` is: what the worker needs to know about where
+ * it came from is told to it, not inferred from a blob URL.
+ */
+export function getAssetOrigin(): string {
+  if (typeof window !== "undefined") {
+    return "";
+  }
+  return globalThis.__ASSET_ORIGIN__ ?? "";
+}
+
 export function assetUrl(path: string): string {
-  return buildAssetUrl(path, getAssetManifest(), getCdnBase());
+  return buildAssetUrl(
+    path,
+    getAssetManifest(),
+    getCdnBase(),
+    getAssetOrigin(),
+  );
 }
 
 // Rewrites Vite's emitted /assets/... references in the built index.html to
