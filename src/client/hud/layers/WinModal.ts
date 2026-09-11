@@ -6,18 +6,13 @@ import {
   translateText,
   TUTORIAL_VIDEO_URL,
 } from "../../../client/Utils";
+import { formatStake, winnerPayout } from "../../../core/arena/stakeTiers"; // [ARENA]
 import { EventBus } from "../../../core/EventBus";
 import { RankedType } from "../../../core/game/Game";
 import { GameUpdateType } from "../../../core/game/GameUpdates";
-import { getUserMe } from "../../Api";
-import "../../components/CosmeticButton";
+import { stakedMatch, StakedMatch } from "../../arena/wagerSession"; // [ARENA]
 import "../../components/SteamWishlist";
 import { Controller } from "../../Controller";
-import {
-  fetchCosmetics,
-  purchaseCosmetic,
-  resolveCosmetics,
-} from "../../Cosmetics";
 import { crazyGamesSDK } from "../../CrazyGamesSDK";
 import { steamSDK } from "../../SteamSDK";
 import { SendWinnerEvent } from "../../Transport";
@@ -42,8 +37,9 @@ export class WinModal extends LitElement implements Controller {
   @state()
   private isRankedGame = false;
 
+  // [ARENA] What this player staked on this match, or null for a free game.
   @state()
-  private patternContent: TemplateResult | null = null;
+  private stake: StakedMatch | null = null;
 
   private _title: string;
 
@@ -109,6 +105,13 @@ export class WinModal extends LitElement implements Controller {
   }
 
   innerHtml() {
+    // [ARENA] A match somebody staked into ends on what happened to the pot,
+    // not on a promo. Checked first: it outranks every other branch, including
+    // the beginner tutorial, because the player is owed the number.
+    if (this.stake !== null) {
+      return this.renderWagerResult(this.stake);
+    }
+
     // The Steam desktop build has nothing to wishlist — fall through to the
     // other promos so the box is never empty.
     const canWishlist = !steamSDK.isOnSteam();
@@ -120,13 +123,64 @@ export class WinModal extends LitElement implements Controller {
     if (!this.isWin && getGamesPlayed() < 3) {
       return this.renderYoutubeTutorial();
     }
-    if (this.rand < 0.25 && canWishlist) {
+    if (this.rand < 0.5 && canWishlist) {
       return this.steamWishlist();
-    } else if (this.rand < 0.5) {
-      return this.discordDisplay();
-    } else {
-      return this.renderPatternButton();
     }
+    return this.discordDisplay();
+  }
+
+  /**
+   * [ARENA] The end of a wagered match: what the winner takes, or what the
+   * loser lost and an invitation to go again.
+   *
+   * Amounts render through `formatStake` as data, outside the translated
+   * string — the same rule the lobby card follows, so a missing translation
+   * can never hide what changed hands. `winnerPayout` is the shared
+   * implementation the stake prompt already quoted, so the figure here is the
+   * one the player agreed to rather than a second copy of the rake maths.
+   *
+   * The winner's line says the payout is *being* made, not that it has been.
+   * Settlement runs off the server's replay after the match and fails closed —
+   * claiming the tokens had landed would be a promise this screen cannot keep.
+   */
+  private renderWagerResult(stake: StakedMatch): TemplateResult {
+    if (this.isWin) {
+      const takes = formatStake(
+        winnerPayout(stake.entryFee, stake.maxPlayers, stake.rakeBps),
+        stake.decimals,
+        stake.symbol,
+      );
+      return html`
+        <div class="text-center mb-6 bg-black/30 p-4 rounded-sm">
+          <h3 class="text-xl font-semibold text-white mb-3">
+            ${translateText("win_modal.arena_won_title")}
+          </h3>
+          <p class="text-[34px] font-bold text-emerald-400 leading-none my-2">
+            ${takes}
+          </p>
+          <p class="text-sm text-white/70 mt-3">
+            ${translateText("win_modal.arena_won_note")}
+          </p>
+        </div>
+      `;
+    }
+
+    const staked = formatStake(stake.entryFee, stake.decimals, stake.symbol);
+    return html`
+      <div class="text-center mb-6 bg-black/30 p-4 rounded-sm">
+        <h3 class="text-xl font-semibold text-white mb-3">
+          ${translateText("win_modal.arena_lost_title")}
+        </h3>
+        <p class="text-white mb-4">
+          ${translateText("win_modal.arena_lost_body", { stake: staked })}
+        </p>
+        <o-button
+          variant="primary"
+          .title=${translateText("win_modal.arena_try_again")}
+          @click=${this._handleExit}
+        ></o-button>
+      </div>
+    `;
   }
 
   renderYoutubeTutorial() {
@@ -146,57 +200,6 @@ export class WinModal extends LitElement implements Controller {
             allowfullscreen
           ></iframe>
         </div>
-      </div>
-    `;
-  }
-
-  renderPatternButton() {
-    return html`
-      <div class="text-center mb-6 bg-black/30 p-2.5 rounded-sm">
-        <h3 class="text-xl font-semibold text-white mb-3">
-          ${translateText("win_modal.support_openfront")}
-        </h3>
-        <p class="text-white mb-3">
-          ${translateText("win_modal.territory_pattern")}
-        </p>
-        <div
-          class="mx-auto w-full overflow-x-auto overflow-y-visible rounded-sm"
-        >
-          <div class="flex min-w-max items-start justify-start gap-4 px-1 py-1">
-            ${this.patternContent}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  async loadPatternContent() {
-    const me = await getUserMe();
-    const cosmetics = await fetchCosmetics();
-
-    const purchasable = resolveCosmetics(cosmetics, me, null).filter(
-      (r) => r.type === "pattern" && r.relationship === "purchasable",
-    );
-
-    if (purchasable.length === 0) {
-      this.patternContent = html``;
-      return;
-    }
-
-    // Shuffle the array and take patterns. Will always be 3 wide to allow scrolling
-    const shuffled = [...purchasable].sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, Math.min(3, shuffled.length));
-
-    this.patternContent = html`
-      <div class="flex gap-4 flex-nowrap justify-start items-start">
-        ${selected.map(
-          (r) => html`
-            <cosmetic-button
-              .resolved=${r}
-              .onPurchase=${purchaseCosmetic}
-            ></cosmetic-button>
-          `,
-        )}
       </div>
     `;
   }
@@ -236,9 +239,11 @@ export class WinModal extends LitElement implements Controller {
     `;
   }
 
-  async show() {
+  show() {
     crazyGamesSDK.gameplayStop();
-    await this.loadPatternContent();
+    // [ARENA] Read at show time, not at construction: the stake is written by
+    // the join gate, which runs long before this layer is wired up.
+    this.stake = stakedMatch(this.game.gameID());
     // Check if this is a ranked game
     this.isRankedGame =
       this.game.config().gameConfig().rankedType !== undefined;

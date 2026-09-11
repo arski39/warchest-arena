@@ -1818,6 +1818,11 @@
     "title": "Wallet"
   },
   "win_modal": {
+    "arena_lost_body": "Your {stake} stake goes to the winner.",
+    "arena_lost_title": "Not this time",
+    "arena_try_again": "Try again",
+    "arena_won_note": "Paid out from escrow to your wallet once the server has verified the match. Shown net of the house rake.",
+    "arena_won_title": "You take the pot",
     "died": "You died",
     "discord_description": "Connect with players, discover new features, and win prizes!",
     "exit": "Exit Game",
@@ -1831,8 +1836,6 @@
     "other_won": "{player} has won!",
     "requeue": "Play Again",
     "spectate": "Spectate",
-    "support_openfront": "Support OpenFront!",
-    "territory_pattern": "Purchase a territory skin to go ad-free!",
     "you_won": "You Won!",
     "your_team": "Your team won!",
     "youtube_tutorial": "Need some help?"

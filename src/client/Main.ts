@@ -89,6 +89,7 @@ import {
   getConnectedWallet,
   mountWalletProvider,
 } from "./arena/WalletProvider";
+import { rememberStakedMatch } from "./arena/wagerSession"; // [ARENA]
 import { storedWalletAddress } from "./arena/walletSession";
 mountWalletProvider();
 
@@ -817,6 +818,10 @@ class Client {
     const { promptWagerJoin } = await import("./arena/wagerJoinFlow");
     const staked = await promptWagerJoin(lobby.gameID, wager);
     if (staked === null) return "cancelled";
+    // [ARENA] The end-of-match screen shows what this pot was worth, and by
+    // then the lobby is gone -- GameStartInfo carries no escrow. This is the
+    // last moment anything in the browser knows.
+    rememberStakedMatch(lobby.gameID, wager);
     return staked;
   }
 
