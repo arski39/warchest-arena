@@ -78,6 +78,9 @@ export class JoinLobbyModal extends BaseModal {
   private leaveLobbyOnClose = true;
   private countdownTimerId: number | null = null;
   private handledJoinTimeout = false;
+  // [ARENA] The lobby this client has put a stake into, set by Main once the
+  // stake gate has actually taken payment. See checkForJoinTimeout.
+  private stakedLobbyId: string | null = null;
 
   private readonly hostedLobbySocket = new PublicLobbySocket((lobbies) => {
     this.hostedLobbies = lobbies.games?.hosted ?? [];
@@ -685,6 +688,7 @@ export class JoinLobbyModal extends BaseModal {
     this.isConnecting = true;
     this.handledJoinTimeout = false;
     this.trackedWager = null; // [ARENA]
+    this.stakedLobbyId = null; // [ARENA]
     this.startLobbyUpdates();
     if (lobbyInfo) {
       this.updateFromLobby(lobbyInfo);
@@ -1168,12 +1172,42 @@ export class JoinLobbyModal extends BaseModal {
     this.countdownTimerId = null;
   }
 
+  /**
+   * [ARENA] Records that this client has paid to be in this lobby.
+   *
+   * Called by Main after the stake gate returns wallet fields, which is the
+   * only place that knows a join was actually paid for -- the modal itself
+   * cannot tell, because `/exists` (the link-join path) carries no wager and
+   * `lobby_info` does not arrive until the join has already succeeded.
+   */
+  public markStakedJoin(gameID: string): void {
+    this.stakedLobbyId = gameID;
+  }
+
   private checkForJoinTimeout() {
     if (
       this.handledJoinTimeout ||
       !this.isConnecting ||
       this.lobbyStartAt === null ||
       !this.isModalOpen
+    ) {
+      return;
+    }
+    // [ARENA] Never time a player out of a lobby they have paid for.
+    //
+    // This check means "a lobby started without you", and its answer --
+    // closeAndLeave() -- is right for a free public lobby you merely clicked.
+    // For a wagered one it is the worst available response: the stake is
+    // already in escrow and InProgress, so leaving recovers nothing and only
+    // guarantees the match cannot be played. Staying costs nothing, and the
+    // server can still admit a late arrival.
+    //
+    // The countdown it was racing is armed by maybeAutoStartFilledWager(),
+    // which is triggered BY this player's own stake -- so the player was being
+    // ejected by a timer their payment started.
+    if (
+      this.stakedLobbyId === this.currentLobbyId ||
+      this.trackedWager !== null
     ) {
       return;
     }

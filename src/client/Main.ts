@@ -843,6 +843,13 @@ class Client {
       return;
     }
 
+    // [ARENA] Tell the join modal the seat is paid for, before anything can
+    // conclude the player failed to reach it. walletAddress is present only
+    // when the stake gate actually took payment.
+    if ("walletAddress" in wagerFields) {
+      this.joinModal?.markStakedJoin(lobby.gameID);
+    }
+
     console.log(`joining lobby ${lobby.gameID}`);
     if (this.lobbyHandle !== null) {
       console.log("joining lobby, stopping existing game");
