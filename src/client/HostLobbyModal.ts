@@ -535,6 +535,35 @@ export class HostLobbyModal extends BaseModal {
   // duel that could not be listed is still a perfectly good lobby with a
   // shareable link, and refusing the whole thing would be worse.
   private async attachDuelWager(tier: number): Promise<void> {
+    // [ARENA] Ask whether this deployment can advertise a wagered lobby BEFORE
+    // creating the escrow.
+    //
+    // A duel is a matchmaking button: the player asked to be paired, not to be
+    // handed a lobby to share. When ARENA_PUBLIC_WAGER_LOBBIES is off -- or its
+    // replay probe failed -- a wagered lobby may not be listed at all
+    // (listingRefusedForWager), so DuelPanel.openDuelAt() can never see one and
+    // every press of Find creates a lobby nobody is able to discover. Staking
+    // into that is money in a room with no door: it comes back, but only when
+    // the sweeper reaches it hours later. Two such escrows were created minutes
+    // apart on the live site before this check existed.
+    //
+    // Deliberately a refusal rather than a fallback to a shareable lobby. The
+    // two halves of the gate are a pair by design, so the stake would be
+    // refused here anyway -- wagerRefusedForVisibility mirrors
+    // listingRefusedForWager -- and the only thing that changes with the order
+    // is whether the player finds out before or after their tokens move.
+    //
+    // The read itself is not new; awaiting it is. loadWagerState() is fired
+    // and forgotten on the line that creates the lobby, so this value was
+    // still unpopulated when the escrow was being made.
+    if (this.duelShouldList) {
+      await this.loadWagerState();
+      if (!this.wagerPublicLobbies) {
+        this.wagerError = translateText("duel.error_matchmaking_off");
+        return;
+      }
+    }
+
     const result = await setLobbyWager(this.lobbyId, { tier, maxPlayers: 2 });
     if (!result.ok) {
       const key = `host_modal.wager_error_${result.error ?? "generic"}`;

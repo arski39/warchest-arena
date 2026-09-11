@@ -469,6 +469,7 @@
     "cancel_and_refund": "Cancel and refund my stake",
     "cancelling_in": "No opponent yet. Cancelling in {time} and refunding your stake.",
     "error_generic": "Could not set up the duel. Try again.",
+    "error_matchmaking_off": "Duels can't be matched on this server right now, so no stake was taken. Create a lobby and share the link instead.",
     "error_no_stake": "Pick a stake first.",
     "error_not_listed": "Your duel was created but could not be advertised, so nobody will find it automatically. Share the link instead.",
     "explain": "Pick your stake. We'll match you with someone playing for the same amount — winner takes the pot.",
