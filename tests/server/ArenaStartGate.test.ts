@@ -88,6 +88,27 @@ describe("[ARENA] wagered start gate", () => {
     } as any);
   }
 
+  /**
+   * [ARENA] Seat `count` staked players in the lobby.
+   *
+   * maybeAutoStartFilledWager() requires every paid seat to be CONNECTED, not
+   * merely paid — the escrow reaches InProgress seconds before the last
+   * player's socket does. See ArenaWagerStartPresence.test.ts.
+   */
+  function seat(game: GameServer, count: number) {
+    (game as any).activeClients = Array.from({ length: count }, (_, i) => ({
+      clientID: `p${i}`,
+      persistentID: `pid${i}`,
+      username: `player${i}`,
+      // gameInfo() reads these off every client; a bare stub trips it up.
+      friends: [],
+      clanTag: null,
+      lastPing: Date.now(),
+      spectator: false,
+      ws: { readyState: 1 },
+    }));
+  }
+
   const HOST = {
     clientID: "host",
     isLobbyCreator: true,
@@ -238,6 +259,7 @@ describe("[ARENA] wagered start gate", () => {
       const game = makeGame(GAME_ID);
       matchRegistry.register(GAME_ID, wager());
       observe(GAME_ID, MatchStatus.InProgress, 2);
+      seat(game, 2);
 
       game.maybeAutoStartFilledWager();
 
@@ -289,6 +311,7 @@ describe("[ARENA] wagered start gate", () => {
       const game = makeGame(GAME_ID);
       matchRegistry.register(GAME_ID, wager());
       observe(GAME_ID, MatchStatus.InProgress, 2);
+      seat(game, 2);
 
       game.maybeAutoStartFilledWager();
       expect(game.startCountdownPending()).toBe(true);

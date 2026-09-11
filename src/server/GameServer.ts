@@ -2039,6 +2039,31 @@ export class GameServer {
     if (!matchRegistry.isWagered(this.id) || !wagerReadyToStart(this.id)) {
       return;
     }
+    // [ARENA] Everyone who paid has to actually be HERE, not merely to have
+    // paid. The escrow flips to InProgress the instant the last join_match
+    // confirms, which is seconds BEFORE that player's browser has opened its
+    // websocket -- it still has to connect, send join, and wait out
+    // verifyOnchainMembership's retry ladder (~300/600/1200/2400ms of backoff
+    // on its own). Arming the countdown on the chain state alone gave them
+    // WAGER_FULL_START_DELAY_MS (5s) to finish all of that.
+    //
+    // When they lost that race the match started without them: a 1v0 that the
+    // connected player wins by walkover, paying out a pot the absent player
+    // staked and never got to play for. Their own client, still showing
+    // "connecting", then told them they had not entered the game in time and
+    // left the lobby on their behalf. Observed live on match 92M66WDU.
+    //
+    // Not starting is the safe direction and is what the rest of the lifecycle
+    // already assumes: a wagered lobby that never starts refunds, while one
+    // that starts wrong pays the wrong wallet.
+    //
+    // Seats, not connections: a spectator holds none and must not be able to
+    // stand in for a staker who has not arrived.
+    const seats = matchRegistry.chainState(this.id)?.maxPlayers;
+    const present = this.activeClients.filter((c) => !c.spectator).length;
+    if (seats !== undefined && present < seats) {
+      return;
+    }
     this.log.info("wagered lobby filled, starting itself", {
       gameID: this.id,
       delayMs: WAGER_FULL_START_DELAY_MS,
