@@ -90,7 +90,39 @@ export class WinCheckExecution implements Execution {
       return;
     }
 
-    if (this.mg.config().gameConfig().rankedType === RankedType.OneVOne) {
+    // [ARENA] Last human standing wins ANY two-human FFA, not only upstream's
+    // ranked 1v1 queue.
+    //
+    // Upstream gates this on rankedType === OneVOne. A wagered duel is the same
+    // shape of match -- two humans, one pot, the bots are scenery -- but it is
+    // a private lobby and deliberately NOT ranked: rankedType carries ladder
+    // semantics, and on the server it also opts a lobby into
+    // cancelShortHandedMatch(), whose kick reason pushes players back into the
+    // matchmaking queue. That is wrong for a lobby somebody staked into by
+    // hand, so a duel cannot simply borrow the flag.
+    //
+    // Without this a duel fell through to the generic FFA condition below --
+    // own most of the map, or outlast the match timer -- and eating your
+    // opponent did not end the game. Seen live on game ihMXJTQm: one player ate
+    // the other ~70s in, the match did not end, both players left, and the
+    // replay faithfully reproduced a game with no winner. settle_match had
+    // nobody to pay, so 2 WARC sat in escrow waiting out the 24h refund. In a
+    // duel, eating your opponent has to BE the win.
+    //
+    // Counted from the roster rather than read from gameConfig.maxPlayers. They
+    // are the same fact, but maxPlayers arrives over a config push that a
+    // server-side auto-start once skipped entirely (see [K] in the root
+    // CLAUDE.md), whereas the roster is in GameStartInfo and so is identical in
+    // a replay and cannot go missing. allPlayers(), not players(), so this is a
+    // constant property of the match rather than something that becomes true
+    // once a 16-player FFA has killed its way down to the last two.
+    const humanCount = this.mg
+      .allPlayers()
+      .filter((p) => p.type() === PlayerType.Human).length;
+    if (
+      this.mg.config().gameConfig().rankedType === RankedType.OneVOne ||
+      humanCount === 2
+    ) {
       const humans = sorted.filter(
         (p) => p.type() === PlayerType.Human && !p.isDisconnected(),
       );
