@@ -50,6 +50,10 @@ export class ClientEnv {
       // [ARENA] Absent means off — never assume a bypass we were not told about.
       arenaDevBypass: bc.arenaDevBypass ?? false,
       arenaStakeSymbol: bc.arenaStakeSymbol ?? "",
+      // [ARENA] Empty when wagering is off; the wallet card treats that as
+      // "nothing to show" rather than querying a blank endpoint.
+      arenaStakeMint: bc.arenaStakeMint ?? "",
+      arenaRpcUrl: bc.arenaRpcUrl ?? "",
     };
     return ClientEnv.values;
   }
@@ -97,6 +101,21 @@ export class ClientEnv {
   // how someone stakes without knowing in what.
   static arenaStakeSymbol(): string {
     return ClientEnv.get().arenaStakeSymbol;
+  }
+
+  /** [ARENA] Base58 stake mint, or "" when this deployment has no wagering. */
+  static arenaStakeMint(): string {
+    return ClientEnv.get().arenaStakeMint;
+  }
+
+  /**
+   * [ARENA] The keyless public RPC endpoint, or "" when wagering is off.
+   *
+   * Same value the stake prompt hands the browser per match; surfaced here so
+   * the menu can read a balance before any lobby exists.
+   */
+  static arenaRpcUrl(): string {
+    return ClientEnv.get().arenaRpcUrl;
   }
 
   static arenaDevBypass(): boolean {
@@ -253,4 +272,6 @@ export interface ClientEnvValues {
   sourceRepoUrl?: string;
   arenaDevBypass: boolean;
   arenaStakeSymbol: string;
+  arenaStakeMint: string;
+  arenaRpcUrl: string;
 }

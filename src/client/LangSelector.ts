@@ -85,9 +85,17 @@ export class LangSelector extends LitElement {
   }
 
   private async initializeLanguage() {
-    const browserLocale = navigator.language;
+    // [ARENA] English by default for everyone, rather than following
+    // navigator.language. An explicit choice still wins and still persists —
+    // this changes the DEFAULT, not the selector.
+    //
+    // It matters beyond taste here: only resources/lang/en.json is editable in
+    // this repo (the other ~40 locales are Crowdin-managed and still carry
+    // upstream's strings), so a browser set to another language saw a
+    // half-translated fork — arena screens in English inside chrome that still
+    // said OpenFront.
     const savedLang = localStorage.getItem("lang");
-    const userLang = this.getClosestSupportedLang(savedLang ?? browserLocale);
+    const userLang = this.getClosestSupportedLang(savedLang ?? "en");
 
     const [defaultTranslations, translations] = await Promise.all([
       this.loadLanguage("en"),

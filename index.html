@@ -99,7 +99,9 @@
         instanceId: <%- instanceId %>,
         sourceRepoUrl: <%- sourceRepoUrl %>,
         arenaDevBypass: <%- arenaDevBypass %>,
-        arenaStakeSymbol: <%- arenaStakeSymbol %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
+        arenaStakeSymbol: <%- arenaStakeSymbol %>,
+        arenaStakeMint: <%- arenaStakeMint %>,
+        arenaRpcUrl: <%- arenaRpcUrl %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
       };
       document.documentElement.style.setProperty(
         "--background-image-url",

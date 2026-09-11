@@ -1,0 +1,232 @@
+// [ARENA] What the connected wallet actually holds, shown on the menu.
+//
+// ## Why this speaks JSON-RPC over fetch instead of using @solana/web3.js
+//
+// The hardest standing constraint on this client is that `@solana/web3.js`
+// (~296 kB) stays inside the lazily imported `wagerJoinFlow` chunk and out of
+// the main bundle, which every player downloads whether or not they ever
+// stake. A balance read needs two RPC calls and no key handling, and Solana's
+// RPC is plain JSON over HTTP, so `fetch` does the whole job for zero bytes.
+//
+// `getTokenAccountsByOwner` is used rather than deriving the associated token
+// address, precisely because deriving an ATA needs PDA maths and therefore
+// needs web3.js. Asking the node "which token accounts does this owner have
+// for this mint" gets the same answer over the wire. It is also the more
+// correct question: a player can legitimately stake from a non-canonical
+// token account — `join_match` checks owner and mint, not ATA derivation, and
+// devnet scenario S7 exists for exactly that case.
+//
+// ## What it deliberately does not do
+//
+// No Add Funds and no Cash Out. This deployment has neither flow: stakes move
+// only through `join_match` and payouts only through `settle_match`. A control
+// that looks like a deposit and does nothing is worse than no control.
+//
+// It also does not offer a connect button. Wallet connection lives in the
+// account menu and is deliberately menu-only (it swaps `sub`, hence the
+// persistentID); a second entry point here would be a second thing to keep in
+// step with that rule.
+import { LitElement, html } from "lit";
+import { customElement, state } from "lit/decorators.js";
+import { formatStake } from "../../core/arena/stakeTiers";
+import { ClientEnv } from "../ClientEnv";
+import { translateText } from "../Utils";
+import { getConnectedWallet } from "./WalletProvider";
+
+/** Fixed by the protocol. */
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+/** How often to notice that a wallet was connected elsewhere on the page. */
+const POLL_MS = 15_000;
+
+interface RpcResponse {
+  result?: unknown;
+  error?: { message?: string };
+}
+
+@customElement("wallet-balance-card")
+export class WalletBalanceCard extends LitElement {
+  @state() private address: string | null = null;
+  @state() private stakeBalance: string | null = null;
+  @state() private solBalance: string | null = null;
+  @state() private busy = false;
+  @state() private stale = false;
+  @state() private copied = false;
+
+  private timer: number | null = null;
+
+  createRenderRoot() {
+    return this; // light DOM so Tailwind utilities apply
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    void this.refresh();
+    // There is no "wallet connected" event to subscribe to — connecting
+    // happens in AccountModal, which this component does not reach into. A
+    // slow poll notices it without coupling the two together.
+    this.timer = window.setInterval(() => void this.refresh(), POLL_MS);
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    if (this.timer !== null) window.clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  /** Wagering off means no mint and no endpoint, so there is nothing to read. */
+  private configured(): boolean {
+    return ClientEnv.arenaStakeMint() !== "" && ClientEnv.arenaRpcUrl() !== "";
+  }
+
+  private async rpc(method: string, params: unknown[]): Promise<unknown> {
+    const response = await fetch(ClientEnv.arenaRpcUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    if (!response.ok) throw new Error(`${method}: HTTP ${response.status}`);
+    const body = (await response.json()) as RpcResponse;
+    if (body.error !== undefined) {
+      throw new Error(`${method}: ${body.error.message ?? "rpc error"}`);
+    }
+    return body.result;
+  }
+
+  private async refresh(): Promise<void> {
+    this.address = getConnectedWallet()?.publicKey ?? null;
+    if (this.address === null || !this.configured() || this.busy) return;
+
+    this.busy = true;
+    try {
+      const [tokens, lamports] = await Promise.all([
+        this.rpc("getTokenAccountsByOwner", [
+          this.address,
+          { mint: ClientEnv.arenaStakeMint() },
+          { encoding: "jsonParsed" },
+        ]),
+        this.rpc("getBalance", [this.address]),
+      ]);
+
+      this.stakeBalance = this.sumTokenAccounts(tokens);
+      this.solBalance = this.formatSol(lamports);
+      this.stale = false;
+    } catch {
+      // A balance is informational. An RPC hiccup must not put an error card on
+      // the menu, so the last known figures stay and the card says they are
+      // stale. Public endpoints rate-limit hard; see the membership-retry note.
+      this.stale = true;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /**
+   * Every account for the mint, summed.
+   *
+   * Not just the first: a wallet can hold more than one token account for a
+   * mint, and showing only one would understate what the player has.
+   */
+  private sumTokenAccounts(tokens: unknown): string {
+    let base = 0n;
+    let decimals = 0;
+    const value = (tokens as { value?: unknown[] } | null)?.value ?? [];
+    for (const entry of value) {
+      const amount = (
+        entry as {
+          account?: {
+            data?: {
+              parsed?: { info?: { tokenAmount?: Record<string, unknown> } };
+            };
+          };
+        }
+      )?.account?.data?.parsed?.info?.tokenAmount;
+      if (amount === undefined) continue;
+      base += BigInt(String(amount.amount ?? "0"));
+      decimals = Number(amount.decimals ?? 0);
+    }
+    // formatStake, not hand-rolled maths: a u64 is not a Number, and this is
+    // the one implementation every amount on the site goes through.
+    return formatStake(base, decimals);
+  }
+
+  /** Four decimal places, the convention wallets use. String surgery, never Number. */
+  private formatSol(lamports: unknown): string {
+    const raw = BigInt(
+      String((lamports as { value?: unknown } | null)?.value ?? 0),
+    );
+    const whole = raw / LAMPORTS_PER_SOL;
+    const fraction = (raw % LAMPORTS_PER_SOL).toString().padStart(9, "0");
+    return `${whole}.${fraction.slice(0, 4)}`;
+  }
+
+  private handleCopy = () => {
+    if (this.address === null) return;
+    void navigator.clipboard?.writeText(this.address);
+    this.copied = true;
+    window.setTimeout(() => {
+      this.copied = false;
+    }, 1200);
+  };
+
+  private shortened(address: string): string {
+    return `${address.slice(0, 4)}...${address.slice(-4)}`;
+  }
+
+  render() {
+    if (!this.configured()) return null;
+
+    const symbol = ClientEnv.arenaStakeSymbol();
+    return html`
+      <div class="rounded-xl border border-white/10 bg-surface/70 p-4">
+        <div class="flex items-center justify-between gap-2">
+          <span
+            class="text-xs font-bold uppercase tracking-widest text-white/60"
+            >${translateText("wallet_card.title")}</span
+          >
+          ${this.address !== null
+            ? html`<div class="flex items-center gap-3">
+                <button
+                  @click=${this.handleCopy}
+                  title=${this.address}
+                  class="text-[10px] text-white/40 hover:text-white/80"
+                >
+                  ${this.copied
+                    ? translateText("wallet_card.copied")
+                    : this.shortened(this.address)}
+                </button>
+                <button
+                  @click=${() => void this.refresh()}
+                  ?disabled=${this.busy}
+                  class="text-[10px] text-white/40 hover:text-white/80 disabled:opacity-40"
+                >
+                  ${translateText("wallet_card.refresh")}
+                </button>
+              </div>`
+            : null}
+        </div>
+
+        ${this.address === null
+          ? html`<p class="mt-3 text-sm text-white/40">
+              ${translateText("wallet_card.not_connected")}
+            </p>`
+          : html`
+              <!-- Amounts render as data, outside the translated string: a
+                   missing translation must not be able to hide a balance. -->
+              <p class="mt-2 text-3xl font-black tabular-nums text-white">
+                ${this.stakeBalance ?? "-"}
+                <span class="text-base font-bold text-white/50">${symbol}</span>
+              </p>
+              <p class="text-xs tabular-nums text-white/40">
+                ${this.solBalance ?? "-"} SOL
+              </p>
+              ${this.stale
+                ? html`<p class="mt-2 text-[10px] text-amber-300/80">
+                    ${translateText("wallet_card.stale")}
+                  </p>`
+                : null}
+            `}
+      </div>
+    `;
+  }
+}

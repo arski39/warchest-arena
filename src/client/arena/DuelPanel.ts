@@ -112,29 +112,6 @@ export class DuelPanel extends BaseModal {
     return null;
   }
 
-  /**
-   * How many people are sitting in open duels at this stake right now.
-   *
-   * Counted from the same broadcast the matching uses, so the number and the
-   * behaviour cannot disagree: if this says one, there is one to join. It is
-   * players *waiting*, not players in progress — a duel that has started is no
-   * longer listed, which is correct here, since what a chooser wants to know is
-   * whether picking this tier finds them an opponent now.
-   */
-  private waitingAt(tier: number): number {
-    let waiting = 0;
-    for (const lobby of this.lobbies?.games?.hosted ?? []) {
-      const wager = lobby.wager;
-      if (wager === undefined) continue;
-      if (wager.maxPlayers !== 2) continue;
-      const lobbyTier = Number(
-        BigInt(wager.entryFee) / 10n ** BigInt(wager.decimals),
-      );
-      if (lobbyTier === tier) waiting += lobby.numClients;
-    }
-    return waiting;
-  }
-
   private handleFind = async (): Promise<void> => {
     if (this.busy) return;
     if (this.tier === null) {
@@ -216,11 +193,6 @@ export class DuelPanel extends BaseModal {
                 <span class="text-2xl font-bold">${tier}</span>
                 <span class="text-[10px] uppercase tracking-widest opacity-70"
                   >${symbol}</span
-                >
-                <span class="text-[10px] opacity-60"
-                  >${translateText("duel.waiting_here", {
-                    count: this.waitingAt(tier),
-                  })}</span
                 >
               </button>
             `,

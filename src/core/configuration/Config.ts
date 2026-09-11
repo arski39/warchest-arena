@@ -52,6 +52,8 @@ declare global {
       // player what they are about to stake. Display only; the server derives
       // the actual fee from the tier.
       arenaStakeSymbol?: string;
+      arenaStakeMint?: string; // [ARENA]
+      arenaRpcUrl?: string; // [ARENA]
     };
   }
 }

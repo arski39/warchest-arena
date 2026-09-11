@@ -131,6 +131,13 @@ export default defineConfig(({ mode }) => {
     // createHtmlPlugin is only registered when !isProduction.
     arenaDevBypass: JSON.stringify(env.ARENA_DEV_BYPASS === "true"),
     arenaStakeSymbol: JSON.stringify(env.ARENA_STAKE_SYMBOL ?? ""),
+    // [ARENA] Must exist here as well as in RenderHtml.ts — index.html is one
+    // template with two renderers, and a variable added to only one is a
+    // ReferenceError on every page load of the other.
+    arenaStakeMint: JSON.stringify(env.ARENA_STAKE_MINT ?? ""),
+    arenaRpcUrl: JSON.stringify(
+      env.ARENA_PUBLIC_RPC_URL ?? env.SOLANA_RPC_URL ?? "",
+    ),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(

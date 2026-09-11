@@ -1,6 +1,7 @@
 import { LitElement, html } from "lit";
 import { customElement } from "lit/decorators.js";
 import { assetUrl } from "../../core/AssetUrls";
+import "../arena/WalletBalanceCard"; // [ARENA]
 import { crazyGamesSDK } from "../CrazyGamesSDK";
 import "./CosmeticBackground";
 import "./NewsBox";
@@ -15,9 +16,14 @@ export class PlayPage extends LitElement {
 
   render() {
     return html`
+      <!-- [ARENA] my-auto, not justify-center on the scrolling parent: a
+           centred flex item taller than its container has its top clipped and
+           cannot be scrolled back to. Auto margins collapse to zero once the
+           content fills the space, so a short menu centres and a long one still
+           scrolls from the top. -->
       <div
         id="page-play"
-        class="flex flex-col gap-2 w-full px-0 lg:px-4 min-h-0"
+        class="flex flex-col gap-2 w-full px-0 lg:px-4 min-h-0 my-auto"
       >
         <token-login class="absolute"></token-login>
         <rewards-modal class="absolute"></rewards-modal>
@@ -155,6 +161,11 @@ export class PlayPage extends LitElement {
             </div>
           </div>
         </div>
+
+        <!-- [ARENA] The wallet sits above the modes: what you can stake is
+             the first thing that decides which tier you pick. Renders nothing
+             at all when this deployment has no wagering configured. -->
+        <wallet-balance-card class="block"></wallet-balance-card>
 
         <game-mode-selector></game-mode-selector>
 

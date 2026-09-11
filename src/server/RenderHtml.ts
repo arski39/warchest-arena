@@ -3,6 +3,7 @@ import type { Response } from "express";
 import fs from "fs/promises";
 import { buildAssetUrl } from "../core/AssetUrls";
 import { devBypassEnabled } from "./arena/devBypass";
+import { publicRpcUrl } from "./arena/matchRegistry"; // [ARENA]
 import { stakeMint } from "./arena/stakeMint"; // [ARENA]
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { getRuntimeAssetManifest } from "./RuntimeAssetManifest";
@@ -40,6 +41,15 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
     // [ARENA] The resolved symbol, not the raw env var: stakeMint() validates
     // it against SYMBOL_PATTERN at boot, and this value reaches every browser.
     arenaStakeSymbol: JSON.stringify(stakeMint()?.symbol ?? ""),
+    // [ARENA] The mint and the PUBLIC rpc endpoint, so the menu can read a
+    // connected wallet's balance without a per-match WagerInfo (which only
+    // exists once a lobby is wagered). Empty when wagering is off, which is
+    // what makes the wallet card hide itself rather than query nothing.
+    //
+    // publicRpcUrl() deliberately, NOT SOLANA_RPC_URL: this value is rendered
+    // into every page, so it must be the keyless one. See ARENA_PUBLIC_RPC_URL.
+    arenaStakeMint: JSON.stringify(stakeMint()?.mintBase58 ?? ""),
+    arenaRpcUrl: JSON.stringify(stakeMint() === null ? "" : publicRpcUrl()),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
     gameplayScreenshotUrl: buildAssetUrl(

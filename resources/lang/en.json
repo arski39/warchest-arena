@@ -482,7 +482,6 @@
     "starting_in": "Both players have staked. Starting in {time}.",
     "starting_soon": "Both players have staked. Starting shortly…",
     "versus": "VS",
-    "waiting_here": "{count} waiting",
     "waiting_opponent": "Waiting for an opponent to stake the same amount…",
     "winner_takes": "Both players stake the same amount. The winner takes the pot, minus the house cut.",
     "your_stake": "Your stake"
@@ -1810,6 +1809,13 @@
     "status_staking": "Confirming the stake...",
     "title": "Wagered match",
     "winner_takes": "Winner receives"
+  },
+  "wallet_card": {
+    "copied": "Copied",
+    "not_connected": "Connect a wallet from the account menu to see your balance.",
+    "refresh": "Refresh",
+    "stale": "Could not refresh — showing the last known balance.",
+    "title": "Wallet"
   },
   "win_modal": {
     "died": "You died",
