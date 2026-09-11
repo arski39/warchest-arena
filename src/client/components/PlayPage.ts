@@ -105,21 +105,23 @@ export class PlayPage extends LitElement {
           </div>
         </div>
 
-        <!-- Top strip: news + identity on the left, Streaming Now on the right. The 2fr/1fr
-             split only exists while the panel is live (.streaming-live via has-[]) —
-             otherwise the left column takes the full row. -->
+        <!-- [ARENA] Top strip: identity only.
+             Upstream had a news banner on the left and a Streaming Now panel on
+             the right, with a 2fr/1fr split that existed only while the panel
+             was live. Both are gone — the news feed and the streamer list are
+             upstream's community, and a fork surfacing them is advertising
+             somebody else's game from its own front page. With the right column
+             gone the split has nothing to split, so the grid goes too. -->
         <div
-          class="w-full pb-4 lg:pb-0 flex flex-col gap-4 sm:-mx-4 sm:w-[calc(100%+2rem)] lg:mx-0 lg:w-full lg:grid lg:grid-cols-1 lg:has-[.streaming-live]:grid-cols-[2fr_1fr] lg:gap-4 lg:items-stretch"
+          class="w-full pb-4 lg:pb-0 flex flex-col gap-4 sm:-mx-4 sm:w-[calc(100%+2rem)] lg:mx-0 lg:w-full"
         >
           <!-- Mobile: spacer for fixed top bar -->
           <div
             class="lg:hidden h-[calc(env(safe-area-inset-top)+56px)] -mb-4"
           ></div>
 
-          <!-- Left column: news banner + identity row, stacked tight. -->
+          <!-- Identity row, now the whole strip. -->
           <div class="flex flex-col gap-2 min-w-0">
-            <news-box></news-box>
-
             <!-- Identity row: flag + tag/username + skin in one line. Flag sits before the
                  tag (where it shows in-game), skin at the end; both preview the current
                  selection. Replaces the old separate SELECT SKIN / SELECT FLAG buttons. -->
@@ -152,12 +154,6 @@ export class PlayPage extends LitElement {
               </div>
             </div>
           </div>
-
-          <!-- Right column: Streaming Now (desktop only), stretched to the left column's
-               full height so the top strip has no dead space. -->
-          <streaming-now
-            class="hidden lg:flex lg:h-full lg:flex-col w-full min-w-0"
-          ></streaming-now>
         </div>
 
         <game-mode-selector></game-mode-selector>

@@ -605,34 +605,38 @@ export class HostLobbyModal extends BaseModal {
 
     return html`
       <div class="custom-scrollbar p-6 flex flex-col gap-6">
+        <!-- [ARENA] Head-to-head, in the shape the wagering-lobby genre uses:
+             the pot leads because it is what both players committed to, then
+             the two seats face each other so an empty one reads as an empty
+             seat rather than as a missing line of text.
+
+             Structure only — no colour is introduced here. The palette comes
+             from the menu-scoped tokens in styles.css, so this panel inherits
+             it rather than hard-coding anything of its own. -->
         ${stake !== null
           ? html`<div class="text-center">
-              <p class="text-white/50 text-xs uppercase tracking-widest">
-                ${translateText("duel.your_stake")}
+              <p class="text-white/40 text-[10px] uppercase tracking-[0.2em]">
+                ${translateText("duel.pot_label")}
               </p>
-              <p class="text-white text-3xl font-bold mt-1">${stake}</p>
+              <p class="text-white text-4xl font-black leading-none mt-1">
+                ${pot}
+              </p>
               <p class="text-white/40 text-xs mt-2">
-                ${translateText("duel.pot_is", { pot: pot ?? "" })}
+                ${translateText("duel.your_stake")} ${stake}
               </p>
             </div>`
           : html`<p class="text-center text-white/50 text-sm">
               ${translateText("duel.no_escrow")}
             </p>`}
 
-        <div class="rounded-xl bg-black/30 border border-white/10 p-4">
-          <p class="text-white/50 text-xs uppercase tracking-widest mb-3">
-            ${translateText("duel.players", {
-              count: this.clients.length,
-            })}
-          </p>
-          ${this.clients.length === 0
-            ? html`<p class="text-white/30 text-sm">—</p>`
-            : html`<ul class="flex flex-col gap-1">
-                ${this.clients.map(
-                  (c) =>
-                    html`<li class="text-white text-sm">${c.username}</li>`,
-                )}
-              </ul>`}
+        <div class="flex items-stretch gap-3">
+          ${this.renderDuelSeat(0)}
+          <div class="flex items-center">
+            <span class="text-white/30 text-sm font-black tracking-widest"
+              >${translateText("duel.versus")}</span
+            >
+          </div>
+          ${this.renderDuelSeat(1)}
         </div>
 
         <p class="text-white/40 text-xs text-center leading-relaxed">
@@ -645,6 +649,49 @@ export class HostLobbyModal extends BaseModal {
             </p>`
           : nothing}
         ${this.renderDuelAction(secondsRemaining)}
+      </div>
+    `;
+  }
+
+  /**
+   * [ARENA] One of the two seats in a duel.
+   *
+   * An empty seat is drawn as a seat, dashed and pulsing, rather than as an
+   * absent row. In a 1v1 the whole question on this screen is whether the other
+   * side has arrived, so that state deserves a shape.
+   *
+   * No claim is made about which seat is *yours*: the client list carries
+   * usernames, not an identity this component can match against, and guessing
+   * wrong would label the opponent with the player's own name. Seats are shown
+   * in join order, which is also the order settle_match indexes scores against.
+   */
+  private renderDuelSeat(index: number) {
+    const client = this.clients[index];
+    if (client === undefined) {
+      return html`
+        <div
+          class="flex-1 min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/15 bg-black/20 py-5 animate-pulse"
+        >
+          <span class="text-white/30 text-2xl leading-none">?</span>
+          <span
+            class="text-white/30 text-[10px] uppercase tracking-[0.16em] text-center px-2"
+            >${translateText("duel.slot_open")}</span
+          >
+        </div>
+      `;
+    }
+    return html`
+      <div
+        class="flex-1 min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-black/40 py-5"
+      >
+        <span
+          class="text-white text-sm font-bold truncate max-w-full px-2 text-center"
+          >${client.username}</span
+        >
+        <span
+          class="text-emerald-300/70 text-[10px] uppercase tracking-[0.16em]"
+          >${translateText("duel.seat_staked")}</span
+        >
       </div>
     `;
   }

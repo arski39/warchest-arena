@@ -132,9 +132,10 @@ export class GameModeSelector extends LitElement {
   }
 
   render() {
-    const ffa = this.lobbies?.games?.["ffa"]?.[0];
-    const teams = this.lobbies?.games?.["team"]?.[0];
-    const special = this.lobbies?.games?.["special"]?.[0];
+    // [ARENA] The master's generated ffa / team / special lobbies are no longer
+    // rendered — see renderPlayerLobbies(). They are still broadcast and still
+    // joinable by URL; this page just stops advertising them.
+    const hosted = this.lobbies?.games?.hosted ?? [];
 
     return html`
       <div class="flex flex-col gap-4 w-full px-4 sm:px-0 mx-auto pb-4 sm:pb-0">
@@ -187,56 +188,82 @@ export class GameModeSelector extends LitElement {
           class="no-crazygames"
         ></ios-add-to-home-screen-banner>
 
-        <!-- [ARENA] Public lobbies, demoted to the bottom and to a smaller
-             card. They led the page and took 40vh; wagered 1v1 is what this
-             site is for, and these are the secondary option. -->
-        ${this.lobbies === null
-          ? html`<div
-              class="flex items-center justify-center h-32 sm:h-[min(15rem,28vh)]"
-            >
-              <span
-                class="w-16 h-16 border-[6px] border-blue-500/30 border-t-blue-500 rounded-full animate-spin"
-              ></span>
-            </div>`
-          : html`<div
-              class="grid grid-cols-1 sm:grid-cols-[2fr_1fr] gap-4 sm:h-[min(15rem,28vh)]"
-            >
-              <!-- Left col: main card (desktop only) -->
-              ${ffa
-                ? html`<div class="hidden sm:block">
-                    ${this.renderLobbyCard(ffa, this.getLobbyTitle(ffa))}
-                  </div>`
-                : nothing}
+        <!-- [ARENA] Player-made lobbies, replacing upstream's generated
+             ffa / team / special cards.
+             Those three were created by the master on a timer and refreshed
+             themselves whether or not anyone was in them, so the page always
+             looked busy and never told you anything true. What a player can
+             act on is which lobbies other players actually made, which is the
+             hosted bucket — the same list the Join browser shows, and the
+             same one the Join button already counts. -->
+        ${this.renderPlayerLobbies(hosted)}
+      </div>
+    `;
+  }
 
-              <!-- Right col: special + teams (desktop only) -->
-              <div class="hidden sm:flex sm:flex-col sm:gap-4">
-                ${special
-                  ? html`<div class="flex-1 min-h-0">
-                      ${this.renderSpecialLobbyCard(special)}
-                    </div>`
-                  : nothing}
-                ${teams
-                  ? html`<div class="flex-1 min-h-0">
-                      ${this.renderLobbyCard(teams, this.getLobbyTitle(teams))}
-                    </div>`
-                  : nothing}
-              </div>
+  /**
+   * [ARENA] Open lobbies other players are hosting right now.
+   *
+   * Reuses `renderLobbyCard`, which is upstream's and already renders a
+   * PublicGameInfo — a hosted lobby is one of those. Keeping the card means
+   * this is a change of *source*, not a second lobby renderer to maintain, and
+   * upstream merges still land on one component.
+   *
+   * Capped at six so a busy evening cannot push the modes off the page. The
+   * Join browser is the full list and the card below says so, rather than the
+   * page silently truncating.
+   */
+  private renderPlayerLobbies(hosted: PublicGameInfo[]) {
+    if (this.lobbies === null) {
+      return html`<div class="flex items-center justify-center h-32">
+        <span
+          class="w-16 h-16 border-[6px] border-malibu-blue/30 border-t-malibu-blue rounded-full animate-spin"
+        ></span>
+      </div>`;
+    }
 
-              <!-- Mobile: special, ffa, teams inline -->
-              <div class="sm:hidden">
-                ${special ? this.renderSpecialLobbyCard(special) : nothing}
-              </div>
-              <div class="sm:hidden">
-                ${ffa
-                  ? this.renderLobbyCard(ffa, this.getLobbyTitle(ffa))
-                  : nothing}
-              </div>
-              <div class="sm:hidden">
-                ${teams
-                  ? this.renderLobbyCard(teams, this.getLobbyTitle(teams))
-                  : nothing}
-              </div>
-            </div>`}
+    if (hosted.length === 0) {
+      // The honest empty state. Upstream never had one here because the
+      // generated lobbies meant the grid was never empty.
+      return html`<div
+        class="flex flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-surface/60 py-8 text-center"
+      >
+        <span class="text-sm font-bold uppercase tracking-widest text-white/70"
+          >${translateText("mode_selector.no_player_lobbies")}</span
+        >
+        <span class="text-xs text-white/40"
+          >${translateText("mode_selector.no_player_lobbies_hint")}</span
+        >
+      </div>`;
+    }
+
+    const shown = hosted.slice(0, 6);
+    return html`
+      <div class="flex flex-col gap-2">
+        <div class="flex items-baseline justify-between px-1">
+          <span
+            class="text-xs font-bold uppercase tracking-widest text-white/50"
+            >${translateText("mode_selector.player_lobbies")}</span
+          >
+          ${hosted.length > shown.length
+            ? html`<button
+                @click=${this.openJoinLobby}
+                class="text-xs text-white/40 underline underline-offset-2 hover:text-white/70"
+              >
+                ${translateText("mode_selector.player_lobbies_more", {
+                  count: hosted.length - shown.length,
+                })}
+              </button>`
+            : null}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          ${shown.map(
+            (lobby) =>
+              html`<div class="h-32 sm:h-36">
+                ${this.renderLobbyCard(lobby, this.getLobbyTitle(lobby))}
+              </div>`,
+          )}
+        </div>
       </div>
     `;
   }

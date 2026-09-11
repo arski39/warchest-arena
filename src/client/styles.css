@@ -38,6 +38,50 @@
     0 0 0 1px #0084d1, 0 0 12px rgba(0, 132, 209, 0.35);
 }
 
+/* [ARENA] Solana-flavoured menu palette.
+ *
+ * Implemented by REDEFINING the existing tokens rather than by re-classing
+ * every component. Tailwind v4 compiles `bg-malibu-blue` to
+ * `background-color: var(--color-malibu-blue)`, so overriding the custom
+ * property in a scoped rule restyles everything that already uses it — with no
+ * markup churn, which is what keeps upstream merges tractable. The token NAMES
+ * are now historical; treat them as "primary" and "primary-hover".
+ *
+ * Scoped to `body:not(.in-game)` on purpose. Main.ts puts `in-game` on the
+ * body for the duration of a match, so the map, the troop and gold bars and
+ * the rest of the HUD keep the palette they were designed and play-tested
+ * against. The brief was the menu; the game is not the menu.
+ *
+ * Worth noting for licensing: the values being replaced came from
+ * `Openfront_Brand_Guidelines.pdf` (see the @theme block above). Moving the
+ * fork off upstream's brand palette is the same direction as the name, logo
+ * and page title changes — §7 asks that this not present itself as official
+ * OpenFront.
+ */
+body:not(.in-game) {
+  /* Solana brand: purple #9945FF into green #14F195. */
+  --color-malibu-blue: #9945ff;
+  --color-aquarius: #b57bff;
+  --color-bright-blue: #9945ff;
+  --color-hex-cyan: #14f195;
+
+  /* Deep, slightly violet ground rather than upstream's navy, so the purple
+     reads as deliberate instead of as a blue that drifted. */
+  --color-surface: #150c24;
+  --color-deep-navy: #0b0614;
+
+  --shadow-malibu-blue: 0 0 15px rgba(153, 69, 255, 0.25);
+  --shadow-malibu-blue-soft: 0 0 12px rgba(153, 69, 255, 0.25);
+  --shadow-malibu-blue-strong: 0 0 15px rgba(153, 69, 255, 0.35);
+  --shadow-malibu-blue-pill: 0 0 6px rgba(153, 69, 255, 0.4);
+  --shadow-malibu-blue-ring-sm: 0 0 0 4px rgba(153, 69, 255, 0.25);
+  --shadow-malibu-blue-ring-lg: 0 0 0 6px rgba(153, 69, 255, 0.35);
+  --shadow-lobby-card-hover:
+    0 0 0 2px #9945ff, 0 0 20px rgba(153, 69, 255, 0.5);
+  --shadow-action-card-hover:
+    0 0 0 1px #9945ff, 0 0 12px rgba(153, 69, 255, 0.4);
+}
+
 @layer base {
   *,
   ::after,
