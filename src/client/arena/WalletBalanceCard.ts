@@ -22,16 +22,19 @@
 // only through `join_match` and payouts only through `settle_match`. A control
 // that looks like a deposit and does nothing is worse than no control.
 //
-// It also does not offer a connect button. Wallet connection lives in the
-// account menu and is deliberately menu-only (it swaps `sub`, hence the
-// persistentID); a second entry point here would be a second thing to keep in
-// step with that rule.
+// It DOES offer a connect button -- a second entry point to the account menu's
+// wallet login, not a second implementation of it (see `handleConnect`). That
+// stays safe because this card only exists on the menu, which is where wallet
+// login is allowed in the first place, and because `walletLogin()` re-checks
+// the rule itself.
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { formatStake } from "../../core/arena/stakeTiers";
+import { sessionProvider } from "../Auth";
 import { ClientEnv } from "../ClientEnv";
 import { translateText } from "../Utils";
 import { getConnectedWallet, phantomBrowseLink } from "./WalletProvider";
+import { storedWalletAddress } from "./walletSession";
 
 /** Fixed by the protocol. */
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -95,8 +98,34 @@ export class WalletBalanceCard extends LitElement {
     return body.result;
   }
 
+  /**
+   * Whose balance this card is showing.
+   *
+   * The same two-source precedence the nav uses (`Main.ts`'s onUserMe), and
+   * deliberately not a second rule: the connected extension first because it is
+   * live, then the remembered address of a wallet *session*. Reading only the
+   * extension is what this card did at first, and it was wrong for the case
+   * that matters most -- immediately after `walletLogin()` reloads the page.
+   * `mountWalletProvider()` runs at module scope while Phantom's auto-connect
+   * is still in flight, so `getConnectedWallet()` is usually null right then,
+   * and the card offered "Connect wallet" to someone who had just connected
+   * their wallet. Clicking it signed them in again, reloaded, and showed the
+   * same button: a login loop that looked like login was broken.
+   *
+   * The provider claim is what makes the remembered address trustworthy. A
+   * stale entry left behind by a failed logout has no `wallet` session to go
+   * with it and is therefore ignored, never believed.
+   */
+  private async currentAddress(): Promise<string | null> {
+    const connected = getConnectedWallet()?.publicKey;
+    if (connected !== undefined) return connected;
+    return (await sessionProvider()) === "wallet"
+      ? storedWalletAddress()
+      : null;
+  }
+
   private async refresh(): Promise<void> {
-    this.address = getConnectedWallet()?.publicKey ?? null;
+    this.address = await this.currentAddress();
     if (this.address === null || !this.configured() || this.busy) return;
 
     this.busy = true;

@@ -19,6 +19,8 @@ const REPO = path.join(HERE, "../..");
 let mint = "DhnecsQ9QKppoqcAJG3t9kPkKxcwXr3wEtZXjBGUXZkJ";
 let rpc = "https://rpc.example";
 let connected: { publicKey: string } | null = null;
+let provider: string | null = null;
+let remembered: string | null = null;
 
 vi.mock("../../src/client/Utils", async (orig) => {
   const actual = await orig<typeof import("../../src/client/Utils")>();
@@ -38,6 +40,14 @@ vi.mock("../../src/client/arena/WalletProvider", () => ({
   phantomBrowseLink: () => null,
 }));
 
+vi.mock("../../src/client/Auth", () => ({
+  sessionProvider: async () => provider,
+}));
+
+vi.mock("../../src/client/arena/walletSession", () => ({
+  storedWalletAddress: () => remembered,
+}));
+
 import { WalletBalanceCard } from "../../src/client/arena/WalletBalanceCard";
 
 /** Constructed, not createElement'd — an erased type import never registers. */
@@ -53,6 +63,8 @@ describe("[ARENA] menu wallet card", () => {
     mint = "DhnecsQ9QKppoqcAJG3t9kPkKxcwXr3wEtZXjBGUXZkJ";
     rpc = "https://rpc.example";
     connected = null;
+    provider = null;
+    remembered = null;
     vi.restoreAllMocks();
   });
 
@@ -141,6 +153,64 @@ describe("[ARENA] menu wallet card", () => {
     await el.updateComplete;
     await vi.waitFor(() => {
       expect(el.innerHTML).toContain("wallet_card.stale");
+    });
+  });
+
+  it("shows the session's wallet before the extension has woken up", async () => {
+    // The reload right after walletLogin(): the session is real and the nav
+    // says so, but Phantom's auto-connect has not finished, so the extension
+    // reports nothing. Reading only the extension put a "Connect wallet"
+    // button in front of someone who had just connected their wallet --
+    // clicking it signed them in again and reloaded to the same screen.
+    connected = null;
+    provider = "wallet";
+    remembered = "8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: string }) => {
+        const method = JSON.parse(init.body).method as string;
+        const result =
+          method === "getBalance"
+            ? { value: 1_234_500_000 }
+            : {
+                value: [
+                  {
+                    account: {
+                      data: {
+                        parsed: {
+                          info: {
+                            tokenAmount: { amount: "7000000", decimals: 6 },
+                          },
+                        },
+                      },
+                    },
+                  },
+                ],
+              };
+        return { ok: true, json: async () => ({ result }) };
+      }),
+    );
+
+    const el = mount();
+    await el.updateComplete;
+    await vi.waitFor(() => {
+      expect(el.innerHTML).toContain("1.2345");
+    });
+    expect(el.innerHTML).toContain(">7");
+    expect(el.innerHTML).not.toContain("account_modal.wallet_login");
+  });
+
+  it("ignores a remembered address without a wallet session", async () => {
+    // A stale entry from a logout that failed to clear is only ever ignored:
+    // the token's provider claim is the authority on whether this is a
+    // session, the address is only how to render it.
+    connected = null;
+    provider = null;
+    remembered = "8uqQv5J69KNM3pHx7bVKhGMLQLa6LvDHpjYfivD72bdc";
+    const el = mount();
+    await el.updateComplete;
+    await vi.waitFor(() => {
+      expect(el.innerHTML).toContain("account_modal.wallet_login");
     });
   });
 
