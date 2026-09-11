@@ -62,11 +62,8 @@ describe("[ARENA] duel settings", () => {
     // would change what a staked match plays like.
     expect(duelBots(false)).toBe(400);
     expect(duelBots(true)).toBe(100);
-    // [ARENA] 15 on every map, deliberately unlike upstream's 10-on-compact.
-    // A duel is a fixed-stake contest, so how long you have must not depend on
-    // a map roll the players did not choose and are not shown.
     expect(duelMaxTimerMinutes(false)).toBe(15);
-    expect(duelMaxTimerMinutes(true)).toBe(15);
+    expect(duelMaxTimerMinutes(true)).toBe(10);
   });
 
   it("uses the compact variant about a fifth of the time", () => {

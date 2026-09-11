@@ -48,25 +48,17 @@ export function duelBots(compact: boolean): number {
 }
 
 /**
- * The match clock, in minutes. **Always 15, on every map.**
+ * The match clock, in minutes.
  *
  * A duel needs one at all: without a timer a losing player can stall, and a
  * wagered match that never ends leaves the pot escrowed until the 24-hour
  * `cancel_match` timeout refunds it — which pays nobody for the game they won.
  *
- * ⚠️ This is the one value in this file that is deliberately **not** upstream's.
- * `get1v1Config()` shortens the clock to 10 on a compact map, which is sound
- * tuning for a free ladder game and the wrong trade here: a duel is something
- * two people paid a fixed stake to enter, and "how long do I have" should not
- * depend on a map roll they did not choose and are not shown. A predictable
- * contest is worth more than per-map tuning once money is involved.
- *
- * `compact` is kept in the signature rather than dropped so the divergence
- * stays visible at both call sites instead of looking like the parameter was
- * never relevant. The ranked path (`MapPlaylist.get1v1Config()`) reads this
- * too and therefore also gets 15 — harmless here, since Ranked is hidden in
- * this fork (its queue 404s).
+ * Upstream's values, kept deliberately: a compact map is smaller, so it is
+ * decided sooner. This was briefly flattened to 15 everywhere and reverted —
+ * per-map tuning is upstream's call and there was no evidence the shorter
+ * clock was a problem.
  */
-export function duelMaxTimerMinutes(_compact: boolean): number {
-  return 15;
+export function duelMaxTimerMinutes(compact: boolean): number {
+  return compact ? 10 : 15;
 }
