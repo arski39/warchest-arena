@@ -1032,7 +1032,7 @@
     "privacy_policy": "Privacy Policy",
     "settings": "Settings",
     "sign_in": "Sign in",
-    "solo": "Solo",
+    "solo": "Solo - Practice",
     "terms_of_service": "Terms of Service",
     "troubleshooting": "Troubleshooting",
     "user_avatar_alt": "{username}'s avatar"
@@ -1789,8 +1789,7 @@
     "too_short": "Username must be at least {min} characters long.",
     "verified_heading": "Verified name",
     "verified_player": "Verified player",
-    "verified_sub_required": "You need an active subscription to play under your verified name.",
-    "verified_toggle": "Verified"
+    "verified_sub_required": "You need an active subscription to play under your verified name."
   },
   "wager_lobby": {
     "cancel": "Back out",

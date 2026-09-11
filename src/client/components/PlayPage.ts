@@ -126,8 +126,13 @@ export class PlayPage extends LitElement {
             class="lg:hidden h-[calc(env(safe-area-inset-top)+56px)] -mb-4"
           ></div>
 
-          <!-- Identity row, now the whole strip. -->
-          <div class="flex flex-col gap-2 min-w-0">
+          <!-- [ARENA] Identity and wallet share the strip: who you are and what
+               you can stake are the two things you check before picking a mode,
+               so they read as one row rather than two stacked bars. Stacks on
+               mobile, where side-by-side would squeeze both. -->
+          <div
+            class="grid grid-cols-1 gap-2 min-w-0 lg:grid-cols-[3fr_2fr] lg:items-stretch"
+          >
             <!-- Identity row: flag + tag/username + skin in one line. Flag sits before the
                  tag (where it shows in-game), skin at the end; both preview the current
                  selection. Replaces the old separate SELECT SKIN / SELECT FLAG buttons. -->
@@ -151,21 +156,21 @@ export class PlayPage extends LitElement {
                 <username-input
                   class="flex-1 min-w-0 h-10 sm:h-[50px]"
                 ></username-input>
-                <!-- Raised 3D shadow so the skin pops off the bar and is easy to spot. -->
-                <cosmetics-input
-                  id="cosmetics-input-mobile"
-                  show-select-label
-                  class="no-crazygames shrink-0 h-full max-h-[52px] aspect-square rounded-lg [box-shadow:0_3px_6px_#00000099,0_1px_2px_#000000cc]"
-                ></cosmetics-input>
+                <!-- [ARENA] The skin picker is gone. It opens CosmeticsModal,
+                     which reads /cosmetics.json — served as {patterns:{},
+                     flags:{}} here, because this deployment sells nothing. The
+                     button therefore opened an empty picker. CosmeticsInput and
+                     CosmeticsModal are untouched and still reachable, the same
+                     treatment Ranked and Clans got; rendering of skins a player
+                     already has is a separate path and still works. -->
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- [ARENA] The wallet sits above the modes: what you can stake is
-             the first thing that decides which tier you pick. Renders nothing
-             at all when this deployment has no wagering configured. -->
-        <wallet-balance-card class="block"></wallet-balance-card>
+          <!-- Renders nothing at all when this deployment has no wagering
+               configured, in which case the grid collapses to one column. -->
+          <wallet-balance-card class="block min-w-0"></wallet-balance-card>
+        </div>
 
         <game-mode-selector></game-mode-selector>
 

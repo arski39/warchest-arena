@@ -339,38 +339,13 @@ export class UsernameInput extends LitElement {
             : ""}
           class="flex-1 min-w-0 border-0 text-2xl font-medium tracking-wider text-left text-white placeholder-white/70 focus:outline-none focus:ring-0 overflow-x-auto whitespace-nowrap text-ellipsis pr-2 bg-transparent disabled:text-blue-400 disabled:cursor-not-allowed [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_0_4px_rgba(0,0,0,0.7)]"
         />
-        <button
-          type="button"
-          class="no-crazygames group flex items-center gap-1.5 shrink-0 cursor-pointer select-none"
-          title=${translateText("username.verified_heading")}
-          aria-pressed=${this.verifiedActive ? "true" : "false"}
-          @click=${this.handleVerifiedToggle}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            class="w-5 h-5 transition-colors ${this.verifiedActive
-              ? "text-blue-400"
-              : "text-white/30 group-hover:text-white/50"}"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-            <path
-              d="M7.5 12.5l3 3 6-6.5"
-              stroke="white"
-              stroke-width="2.2"
-              fill="none"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            ></path>
-          </svg>
-          <span
-            class="hidden sm:inline text-sm font-medium transition-colors ${this
-              .verifiedActive
-              ? "text-blue-400"
-              : "text-white/70 group-hover:text-white"}"
-            >${translateText("username.verified_toggle")}</span
-          >
-        </button>
+        <!-- [ARENA] The verified-name toggle is not rendered. It requires
+             usernameStatus "premium" or "indefinite" from /users/@me, and this
+             fork's auth service returns a player object with no usernameStatus
+             at all (src/auth/userMe.ts) — by design, since it is stateless and
+             has no subscriptions. verifiedName() therefore always returns null
+             and the toggle could never activate. The logic is left intact, the
+             same treatment Ranked and Clans got. -->
       </div>
       ${this.validationError
         ? html`<div
