@@ -102,6 +102,38 @@ describe("[ARENA] duel win condition", () => {
     expect(winUpdates(game)).toHaveLength(0);
   });
 
+  it("hands the win to the player who stayed when the other quits", async () => {
+    // Leaving a duel forfeits it, and this is the payout rule -- not a
+    // courtesy. GameServer marks a client disconnected after 30s of silence
+    // and puts a mark_disconnected intent in the turn log, so the server's
+    // replay reaches this same verdict from the record alone. That matters
+    // more than the live game does: settlement pays verdict.winner, so the
+    // quitter cannot deny the pot to the player who stayed by closing the tab
+    // before a winner is announced.
+    const game = await duel(2);
+    giveLand(game, 1);
+    giveLand(game, 2);
+    game.player("p2_id").markDisconnected(true);
+
+    const wins = winUpdates(game);
+
+    expect(wins).toHaveLength(1);
+    expect(wins[0].winner).toEqual(["player", "client1"]);
+  });
+
+  it("does not crown anybody when both players walk away", async () => {
+    // Both gone is not a win for either of them, and inventing one would pay a
+    // pot to somebody who did not win it. The escrow's 24h timeout refunds
+    // instead -- the same fail-closed direction settlement takes everywhere.
+    const game = await duel(2);
+    giveLand(game, 1);
+    giveLand(game, 2);
+    game.player("p1_id").markDisconnected(true);
+    game.player("p2_id").markDisconnected(true);
+
+    expect(winUpdates(game)).toHaveLength(0);
+  });
+
   it("still honours upstream's ranked 1v1 path", async () => {
     // The original rule must keep working on its own terms, not merely as a
     // side effect of the roster now happening to be two.
