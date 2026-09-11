@@ -42,6 +42,7 @@ import {
   setLobbyListed,
   setLobbyWager, // [ARENA]
 } from "./Api";
+import { renderDuelWaitingRoom } from "./arena/duelWaitingRoom"; // [ARENA]
 import "./components/baseComponents/Modal";
 import { BaseModal } from "./components/BaseModal";
 import "./components/ConfirmDialog";
@@ -177,10 +178,43 @@ export class HostLobbyModal extends BaseModal {
   // showing the opposite of the real listed state.
   private listingRequestInFlight = false;
 
+  // [ARENA] Whether the duel preset has reached the server yet. See
+  // handleLobbyInfo.
+  private duelConfigPushed = false;
+
   private readonly handleLobbyInfo = (event: LobbyInfoEvent) => {
     const lobby = event.lobby;
     if (!this.lobbyId || lobby.gameID !== this.lobbyId) {
       return;
+    }
+    // [ARENA] The duel preset reaches the server HERE, on the first lobby_info,
+    // and this is load-bearing rather than an optimisation.
+    //
+    // The preset picks the map, the bot count, the match clock and
+    // maxPlayers: 2 when the modal opens, but it cannot push them then --
+    // putGameConfig() travels over the eventBus, which does not exist until
+    // the host's lobby connection is up. The deferral used to be justified by
+    // "toggleGameStartTimer() awaits putGameConfig() before starting", which
+    // stopped being true the moment a filled wagered lobby began starting
+    // ITSELF: maybeAutoStartFilledWager() arms the countdown server-side and
+    // asks the client for nothing, so toggleGameStartTimer() never runs and
+    // for an auto-started duel the config was never pushed AT ALL. The match
+    // then began on whatever GameConfig the server happened to hold -- not the
+    // duel map, not the duel bots, not the clock, not two seats. A duel host
+    // configures nothing, so no other call site could save it.
+    //
+    // The first lobby_info is the earliest proof the connection exists, which
+    // makes it the first moment this CAN be sent. Once, hence the flag:
+    // lobby_info arrives continuously, and re-pushing on each would rewrite
+    // the lobby URL every tick.
+    //
+    // Scoped to the duel preset deliberately. Every other host lobby has a
+    // settings screen whose first interaction pushes, and pushing local
+    // defaults unasked would clobber the real config of a lobby reopened
+    // through attachToExistingLobby().
+    if (this.duelPreset && !this.duelConfigPushed) {
+      this.duelConfigPushed = true;
+      void this.putGameConfig();
     }
     if ("serverTime" in lobby && typeof lobby.serverTime === "number") {
       this.serverTimeOffset = calculateServerTimeOffset(lobby.serverTime);
@@ -590,110 +624,23 @@ export class HostLobbyModal extends BaseModal {
     void this.handlePublicListingToggle(isPublic);
   }
 
-  // [ARENA] The duel waiting room: what you staked, who is here, and a way to
-  // start once both have. No configuration, because there is none to make.
-  private renderDuelWaitingRoom(secondsRemaining: number | null) {
-    const wager = this.wager;
-    const stake =
-      wager !== null
-        ? formatStake(BigInt(wager.entryFee), wager.decimals, wager.symbol)
-        : null;
-    const pot =
-      wager !== null
-        ? formatStake(BigInt(wager.entryFee) * 2n, wager.decimals, wager.symbol)
-        : null;
-
-    return html`
-      <div class="custom-scrollbar p-6 flex flex-col gap-6">
-        <!-- [ARENA] Head-to-head, in the shape the wagering-lobby genre uses:
-             the pot leads because it is what both players committed to, then
-             the two seats face each other so an empty one reads as an empty
-             seat rather than as a missing line of text.
-
-             Structure only — no colour is introduced here. The palette comes
-             from the menu-scoped tokens in styles.css, so this panel inherits
-             it rather than hard-coding anything of its own. -->
-        ${stake !== null
-          ? html`<div class="text-center">
-              <p class="text-white/40 text-[10px] uppercase tracking-[0.2em]">
-                ${translateText("duel.pot_label")}
-              </p>
-              <p class="text-white text-4xl font-black leading-none mt-1">
-                ${pot}
-              </p>
-              <p class="text-white/40 text-xs mt-2">
-                ${translateText("duel.your_stake")} ${stake}
-              </p>
-            </div>`
-          : html`<p class="text-center text-white/50 text-sm">
-              ${translateText("duel.no_escrow")}
-            </p>`}
-
-        <div class="flex items-stretch gap-3">
-          ${this.renderDuelSeat(0)}
-          <div class="flex items-center">
-            <span class="text-white/30 text-sm font-black tracking-widest"
-              >${translateText("duel.versus")}</span
-            >
-          </div>
-          ${this.renderDuelSeat(1)}
-        </div>
-
-        <p class="text-white/40 text-xs text-center leading-relaxed">
-          ${translateText("duel.fixed_settings")}
-        </p>
-
+  // [ARENA] The duel waiting room. The pot and the seats are the shared view
+  // in arena/duelWaitingRoom.ts, so the opponent -- who arrives through
+  // JoinLobbyModal, not this one -- is looking at the same screen. Only the
+  // footer differs, because only what each side may DO differs.
+  private renderDuelBody(secondsRemaining: number | null) {
+    return renderDuelWaitingRoom({
+      occupants: this.clients,
+      wager: this.wager,
+      footer: html`
         ${this.wagerError !== null
           ? html`<p class="text-amber-300 text-xs text-center">
               ${this.wagerError}
             </p>`
           : nothing}
         ${this.renderDuelAction(secondsRemaining)}
-      </div>
-    `;
-  }
-
-  /**
-   * [ARENA] One of the two seats in a duel.
-   *
-   * An empty seat is drawn as a seat, dashed and pulsing, rather than as an
-   * absent row. In a 1v1 the whole question on this screen is whether the other
-   * side has arrived, so that state deserves a shape.
-   *
-   * No claim is made about which seat is *yours*: the client list carries
-   * usernames, not an identity this component can match against, and guessing
-   * wrong would label the opponent with the player's own name. Seats are shown
-   * in join order, which is also the order settle_match indexes scores against.
-   */
-  private renderDuelSeat(index: number) {
-    const client = this.clients[index];
-    if (client === undefined) {
-      return html`
-        <div
-          class="flex-1 min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/15 bg-black/20 py-5 animate-pulse"
-        >
-          <span class="text-white/30 text-2xl leading-none">?</span>
-          <span
-            class="text-white/30 text-[10px] uppercase tracking-[0.16em] text-center px-2"
-            >${translateText("duel.slot_open")}</span
-          >
-        </div>
-      `;
-    }
-    return html`
-      <div
-        class="flex-1 min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-black/40 py-5"
-      >
-        <span
-          class="text-white text-sm font-bold truncate max-w-full px-2 text-center"
-          >${client.username}</span
-        >
-        <span
-          class="text-emerald-300/70 text-[10px] uppercase tracking-[0.16em]"
-          >${translateText("duel.seat_staked")}</span
-        >
-      </div>
-    `;
+      `,
+    });
   }
 
   // [ARENA] What a duel host can actually do, which is not what the shared
@@ -785,7 +732,7 @@ export class HostLobbyModal extends BaseModal {
     // rather than hiding a dozen sections individually: a section added later
     // is then absent from the duel by default, which is the safe direction.
     if (this.duelPreset) {
-      return this.renderDuelWaitingRoom(secondsRemaining);
+      return this.renderDuelBody(secondsRemaining);
     }
 
     const inputCards = [
@@ -1149,8 +1096,9 @@ export class HostLobbyModal extends BaseModal {
         // Set directly rather than through handleSelectRandomMap(), which
         // pushes the config immediately: putGameConfig() reaches the server
         // through the eventBus, which does not exist until the host's
-        // connection is up. toggleGameStartTimer() awaits putGameConfig()
-        // before starting, so this lands before the match either way.
+        // connection is up. handleLobbyInfo pushes it at the first moment it
+        // can -- do NOT go back to relying on toggleGameStartTimer() to do it,
+        // which a server-side auto-start bypasses entirely.
         //
         // The pool is upstream's ranked 1v1 one, shared with
         // MapPlaylist.get1v1Config() through core/arena/duelSettings.ts —
@@ -1350,6 +1298,7 @@ export class HostLobbyModal extends BaseModal {
     // [ARENA] Cleared with the rest of the lobby state, so a plain "Create
     // Lobby" after a duel is not silently still capped at two seats.
     this.duelPreset = false;
+    this.duelConfigPushed = false;
     this.duelTier = null;
     this.duelShouldList = false;
     this.wagerMaxPlayers = 16;
@@ -1903,10 +1852,12 @@ export class HostLobbyModal extends BaseModal {
             // Note when it lands: putGameConfig() only reaches the server
             // through the eventBus, which does not exist until the host's
             // lobby connection is up, so the cap applies from the first config
-            // push rather than from the instant of creation. Setting it at
-            // create_game would mean sending a whole GameConfig the modal has
-            // not built yet (CreateGameInputSchema takes a complete one or
-            // nothing) — that belongs with the server-created duel lobbies.
+            // push -- which handleLobbyInfo now makes as soon as that
+            // connection exists -- rather than from the instant of creation.
+            // Setting it at create_game would mean sending a whole GameConfig
+            // the modal has not built yet (CreateGameInputSchema takes a
+            // complete one or nothing) — that belongs with the server-created
+            // duel lobbies.
             maxPlayers: this.duelPreset ? 2 : undefined,
             disabledUnits: this.disabledUnits,
             spawnImmunityDuration: this.spawnImmunity
