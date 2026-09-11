@@ -232,7 +232,7 @@ export class WalletBalanceCard extends LitElement {
 
     const symbol = ClientEnv.arenaStakeSymbol();
     return html`
-      <div class="rounded-xl border border-white/10 bg-surface/70 p-4">
+      <div class="min-w-0 rounded-xl border border-white/10 bg-surface/70 p-4">
         <div class="flex items-center justify-between gap-2">
           <span
             class="text-xs font-bold uppercase tracking-widest text-white/60"

@@ -165,11 +165,16 @@ export class PlayPage extends LitElement {
                      already has is a separate path and still works. -->
               </div>
             </div>
-          </div>
 
-          <!-- Renders nothing at all when this deployment has no wagering
-               configured, in which case the grid collapses to one column. -->
-          <wallet-balance-card class="block min-w-0"></wallet-balance-card>
+            <!-- Second column.
+                 display:contents rather than block: the component renders nothing
+                 when this deployment has no wagering configured, and a host
+                 element with display:block would still occupy a grid column,
+                 squeezing the name bar to 60% width next to an empty gap.
+                 display:contents removes the host's own box, so its inner card
+                 IS the grid item and an empty render leaves no item at all. -->
+            <wallet-balance-card class="contents"></wallet-balance-card>
+          </div>
         </div>
 
         <game-mode-selector></game-mode-selector>
