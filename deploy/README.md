@@ -55,8 +55,24 @@ sudo systemctl reload caddy
 ## Updating
 
 ```bash
-cd /opt/warchest/app && ./deploy/warchest.sh --pull
+cd /opt/warchest/app && git fetch origin && git reset --hard origin/arena-wip-snapshot && sudo ./deploy/warchest.sh
 ```
+
+Both halves of that are load-bearing, and the shorter
+`./deploy/warchest.sh --pull` fails on each:
+
+- **`sudo`.** The script calls `docker` directly and never escalates itself.
+  Docker is root-only on this box, so without it the deploy dies at the first
+  container command — after it has already pulled and built.
+- **`git fetch` + `git reset --hard`, not `--pull`.** `--pull` runs
+  `git pull --ff-only`, which refuses the moment the box's checkout differs
+  from the branch at all. It has: `warchest.sh`'s file mode and its line
+  endings have both drifted here. A reset is unconditional, and nothing on
+  that box is worth keeping — it is a deploy checkout, not a place anyone
+  edits.
+
+`--pull` stays in the script because it is right for a checkout that has never
+drifted. It is not the command to reach for here.
 
 The previous image is retained as `warchest:previous`, so `--rollback` works
 until the _next_ successful build overwrites it.

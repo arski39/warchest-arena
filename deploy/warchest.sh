@@ -27,6 +27,15 @@
 #   ./deploy/warchest.sh --pull          git pull first
 #   ./deploy/warchest.sh --no-build      swap using the existing warchest:latest
 #   ./deploy/warchest.sh --rollback      restore warchest:previous and stop
+#
+# Every one of those needs `sudo` on the box: this script runs `docker`
+# directly and never escalates itself, so without it the deploy dies at the
+# first container command -- after it has already pulled and built.
+#
+# And `--pull` is NOT the routine update here. It runs `git pull --ff-only`,
+# which refuses the moment the deploy checkout differs from the branch, and
+# this one has drifted more than once over this file's own mode and line
+# endings. deploy/README.md carries the command to use instead.
 set -euo pipefail
 
 # ---------------------------------------------------------------- configuration
