@@ -142,3 +142,67 @@ describe("[ARENA] home page mode order", () => {
     expect(openHost).not.toHaveBeenCalled();
   });
 });
+
+// [ARENA] A hover effect must fit in the gutter, because the scroller clips it.
+//
+// `MainLayout`'s scrolling div is `overflow-y-auto overflow-x-hidden`, so
+// whatever a card's hover draws outside itself is cut at that box's edge. The
+// room available is `#page-play`'s `lg:px-4` — 16px.
+//
+// A uniform `hover:scale-105` on the FULL-WIDTH Solo card (~724px at the
+// desktop max width) pushes each edge ~18px out, past the 16px gutter: the
+// hover ring's left and right sides were clipped away and the glow never
+// showed, so the card appeared to grow a top and bottom border and nothing
+// else. Create and Join hid the same bug — they sit in a 2-column grid, so at
+// ~354px each the same scale only reached ~8.8px and stayed inside.
+//
+// jsdom has no layout, so this cannot measure. It pins the class instead,
+// which is the thing that regresses: a uniform scale on a card whose width is
+// set by the page is the bug, and `scale-105` is how it gets written.
+describe("[ARENA] home page hover effects survive the scroller's clip", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("gives no action card a uniform hover scale", async () => {
+    const el = mount();
+    await el.updateComplete;
+
+    const buttons = [...el.querySelectorAll("button")];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      expect(button.className).not.toContain("hover:scale-105");
+    }
+  });
+
+  it("scales the action cards on Y and only slightly on X", async () => {
+    const el = mount();
+    await el.updateComplete;
+
+    // The four mode buttons, as opposed to the lobby-grid cards below them,
+    // which are half-width and have their own (already safe) treatment.
+    const cards = [...el.querySelectorAll("button")].filter((b) =>
+      b.className.includes("hover:scale-y-105"),
+    );
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      expect(card.className).toContain("hover:scale-x-[1.01]");
+    }
+  });
+
+  it("keeps the hover ring on the secondary cards", async () => {
+    // The glow is the highlight the clip was eating. Losing it while fixing
+    // the clip would be fixing the symptom by deleting the feature.
+    const el = mount();
+    await el.updateComplete;
+
+    const glowing = [...el.querySelectorAll("button")].filter((b) =>
+      b.className.includes("--shadow-action-card-hover"),
+    );
+    expect(glowing.map((b) => (b.textContent ?? "").trim())).toEqual([
+      "main.solo",
+      "main.create",
+      "main.join",
+    ]);
+  });
+});

@@ -33,10 +33,30 @@ const CARD_BG = "bg-surface";
 // [ARENA] The two card treatments, named rather than repeated inline. There is
 // exactly one primary card and it marks the site's primary mode — the accent
 // belonged to Solo and now belongs to 1v1.
+//
+// ⚠️ BOTH scale on Y and barely on X, and that is not a style choice. These
+// cards live inside `MainLayout`'s scroller, which is `overflow-y-auto
+// overflow-x-hidden` — so anything a hover draws outside the card is CLIPPED
+// at the scroller's edge, and the gutter it has to fit inside is only the
+// 16px of `#page-play`'s `lg:px-4`.
+//
+// A uniform `scale-105` on a ~724px-wide card pushes each edge out by ~18px,
+// past that 16px — so the hover ring's left and right sides were cut off and
+// the glow never appeared at all. The card looked like it had a top and bottom
+// border and nothing else. `scale-x-[1.01]` is ~3.6px instead, which leaves
+// the ring and effectively all of the glow inside the clip.
+//
+// Do not "tidy" either one back to `scale-105`: it is the horizontal scale
+// that breaks, the failure is invisible to tsc, lint and any test that does
+// not measure, and it only shows on a real hover. Widening the gutter instead
+// would work, but it narrows every card on the page to buy an animation.
+// `overflow-x` cannot simply be made visible either — CSS computes a `visible`
+// axis to `auto` when the other axis scrolls, so that trades the clip for a
+// horizontal scrollbar that appears on hover.
 const PRIMARY_CARD =
   "bg-malibu-blue hover:bg-aquarius active:bg-malibu-blue/80 hover:scale-y-105 hover:scale-x-[1.01]";
 const SECONDARY_CARD =
-  "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-105 hover:shadow-[var(--shadow-action-card-hover)]";
+  "bg-surface hover:brightness-[1.08] active:brightness-[0.95] hover:scale-y-105 hover:scale-x-[1.01] hover:shadow-[var(--shadow-action-card-hover)]";
 
 @customElement("game-mode-selector")
 export class GameModeSelector extends LitElement {
