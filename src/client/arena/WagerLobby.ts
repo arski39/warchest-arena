@@ -1,6 +1,7 @@
 import { LitElement, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { WagerInfo } from "../../core/Schemas";
+import { MatchStatus } from "../../core/arena/arenaProgram";
 import { formatStake, winnerPayout } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
@@ -10,7 +11,11 @@ import {
   getConnectedWallet,
   phantomBrowseLink,
 } from "./WalletProvider";
-import { joinMatchOnChain } from "./onchainJoin";
+import {
+  joinMatchOnChain,
+  readEscrowState,
+  type EscrowState,
+} from "./onchainJoin";
 import { signAuthMessage } from "./walletAuth";
 
 /** Emitted when the player has connected their wallet and paid the entry fee. */
@@ -22,8 +27,15 @@ export interface WagerJoinedDetail {
   walletAddress: string;
   /** base64 ed25519 signature over the canonical auth message. */
   walletSig: string;
-  /** Confirmed join_match transaction signature. */
-  onchainTxSig: string;
+  /**
+   * Confirmed join_match transaction signature.
+   *
+   * [ARENA] Absent when the wallet was already in the escrow's `players[]` and
+   * no new transaction was sent -- the reload case. Audit-only either way:
+   * `ClientJoinMessage` marks it optional and the server proves payment by
+   * reading `players[]`, never by looking at a signature.
+   */
+  onchainTxSig?: string;
 }
 
 /**
@@ -56,6 +68,13 @@ export class WagerLobby extends LitElement {
   @state() private busy = false;
   @state() private status: string | null = null;
   @state() private error: string | null = null;
+  /**
+   * [ARENA] What the escrow says, once a wallet is known. Null while unread or
+   * unreadable -- see readEscrowState: an unreachable RPC must not be shown as
+   * a closed match, so an unknown state still offers the stake button and lets
+   * the attempt itself be the answer.
+   */
+  @state() private escrow: EscrowState | null = null;
 
   // Light DOM, so the page's Tailwind reaches this component. See the class
   // comment: the shadow root is what kept it outside the design system.
@@ -66,7 +85,37 @@ export class WagerLobby extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     const existing = getConnectedWallet();
-    if (existing) this.walletAddress = existing.publicKey;
+    if (existing) {
+      this.walletAddress = existing.publicKey;
+      void this.refreshEscrow();
+    }
+  }
+
+  /**
+   * [ARENA] Asks the escrow what it will accept before the player is offered a
+   * button that spends money.
+   *
+   * Fire-and-forget on purpose: the panel renders immediately with the wager
+   * terms it was handed, and this only ever *narrows* what it offers. A slow
+   * or throttled read therefore costs nothing but the improvement.
+   */
+  private async refreshEscrow(): Promise<void> {
+    const wager = this.wager;
+    const address = this.walletAddress;
+    if (wager === null || address === null) return;
+    const state = await readEscrowState(wager, address);
+    // Guard against a late answer for a wallet the player has since switched
+    // away from, which would describe somebody else's seat.
+    if (this.walletAddress === address) this.escrow = state;
+  }
+
+  /** True once the escrow is known to refuse this wallet's stake. */
+  private get stakeClosed(): boolean {
+    return (
+      this.escrow !== null &&
+      !this.escrow.alreadyStaked &&
+      this.escrow.status !== MatchStatus.Open
+    );
   }
 
   private async handleConnect() {
@@ -89,6 +138,7 @@ export class WagerLobby extends LitElement {
       const wallet = await connectWallet();
       this.walletAddress = wallet.publicKey;
       this.error = null;
+      void this.refreshEscrow();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Wallet connection failed";
     } finally {
@@ -107,7 +157,7 @@ export class WagerLobby extends LitElement {
   }
 
   private async handleJoin() {
-    if (!this.wager || !this.walletAddress) return;
+    if (!this.wager || !this.walletAddress || this.stakeClosed) return;
     this.busy = true;
     this.error = null;
     try {
@@ -119,32 +169,71 @@ export class WagerLobby extends LitElement {
         this.gameId,
       );
 
-      this.status = translateText("wager_lobby.status_staking");
-      const onchainTxSig = await joinMatchOnChain({
-        programId: this.wager.programId,
-        rpcUrl: this.wager.rpcUrl,
-        matchPDA: this.wager.matchPDA,
-        vault: this.wager.vault,
-        mint: this.wager.mint,
-        entryFee: BigInt(this.wager.entryFee),
-      });
+      // [ARENA] A wallet already in players[] has paid, and join_match would
+      // refuse a second attempt. This is the reload case: the player staked,
+      // refreshed, and came back through the gate on an escrow their own stake
+      // had just filled. Before this they were shown JOIN & STAKE, the wallet
+      // could not simulate the transaction, and the panel printed the raw
+      // AnchorError. onchainTxSig is omitted rather than invented -- it is
+      // audit-only (ClientJoinMessage marks it optional) and membership is read
+      // from the escrow, not from a signature.
+      if (this.escrow?.alreadyStaked !== true) {
+        this.status = translateText("wager_lobby.status_staking");
+        const onchainTxSig = await joinMatchOnChain({
+          programId: this.wager.programId,
+          rpcUrl: this.wager.rpcUrl,
+          matchPDA: this.wager.matchPDA,
+          vault: this.wager.vault,
+          mint: this.wager.mint,
+          entryFee: BigInt(this.wager.entryFee),
+        });
+        this.dispatchEvent(
+          new CustomEvent<WagerJoinedDetail>(WAGER_JOINED_EVENT, {
+            detail: { walletAddress, walletSig, onchainTxSig },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        return;
+      }
 
       this.dispatchEvent(
         new CustomEvent<WagerJoinedDetail>(WAGER_JOINED_EVENT, {
-          detail: { walletAddress, walletSig, onchainTxSig },
+          detail: { walletAddress, walletSig },
           bubbles: true,
           composed: true,
         }),
       );
     } catch (e) {
-      this.error =
-        e instanceof Error
-          ? e.message
-          : translateText("wager_lobby.error_generic");
+      this.error = this.errorText(e);
       this.status = null;
+      // The escrow may be why this failed; re-read so the panel stops offering
+      // a button that cannot work.
+      void this.refreshEscrow();
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * [ARENA] A failure as a sentence in the player's language.
+   *
+   * Errors that carry a `code` are ones the program or the RPC named, and each
+   * has a `wager_lobby.error_*` key. Everything else falls back to the raw
+   * message, which is right for a wallet rejection ("User rejected the
+   * request") and for anything unforeseen.
+   */
+  private errorText(e: unknown): string {
+    const code =
+      typeof e === "object" && e !== null && "code" in e
+        ? (e as { code: unknown }).code
+        : undefined;
+    if (typeof code === "string") {
+      return translateText(`wager_lobby.error_${code}`);
+    }
+    return e instanceof Error
+      ? e.message
+      : translateText("wager_lobby.error_generic");
   }
 
   render() {
@@ -237,22 +326,49 @@ export class WagerLobby extends LitElement {
           </p>
         </div>
 
+        <!-- [ARENA] The escrow's own answer, when it has one and it is not
+             "yes". Shown instead of letting the player press a button the
+             program would refuse: join_match pins status == Open, so a full
+             match produced a wallet that could not simulate the transaction
+             and a panel full of AnchorError logs. -->
+        ${this.stakeClosed
+          ? html`<div
+              class="mt-4 rounded-lg border border-amber-400/30
+                     bg-amber-400/10 px-3 py-2.5 text-xs leading-relaxed
+                     text-amber-200"
+            >
+              ${translateText("wager_lobby.match_closed")}
+            </div>`
+          : ""}
+        ${this.escrow?.alreadyStaked
+          ? html`<div
+              class="mt-4 rounded-lg border border-emerald-400/30
+                     bg-emerald-400/10 px-3 py-2.5 text-xs leading-relaxed
+                     text-emerald-200"
+            >
+              ${translateText("wager_lobby.already_staked")}
+            </div>`
+          : ""}
         ${this.walletAddress
           ? html`
               <div class="mt-4 font-mono text-xs text-white/40">
                 ${shorten(this.walletAddress)}
               </div>
-              <o-button
-                class="mt-2 block"
-                variant="primary"
-                width="fill"
-                .title=${this.busy
-                  ? (this.status ??
-                    translateText("wager_lobby.status_confirming"))
-                  : translateText("wager_lobby.join_and_stake")}
-                ?disable=${this.busy}
-                @click=${this.handleJoin}
-              ></o-button>
+              ${this.stakeClosed
+                ? ""
+                : html`<o-button
+                    class="mt-2 block"
+                    variant="primary"
+                    width="fill"
+                    .title=${this.busy
+                      ? (this.status ??
+                        translateText("wager_lobby.status_confirming"))
+                      : this.escrow?.alreadyStaked
+                        ? translateText("wager_lobby.continue_to_lobby")
+                        : translateText("wager_lobby.join_and_stake")}
+                    ?disable=${this.busy}
+                    @click=${this.handleJoin}
+                  ></o-button>`}
             `
           : html`
               <o-button
