@@ -36,6 +36,10 @@ export async function renderHtmlContent(htmlPath: string): Promise<string> {
     // escapes them there. JSON.stringify would embed the quotes as literals.
     siteOrigin: ServerEnv.siteOrigin(),
     siteName: ServerEnv.siteName(),
+    // [ARENA] The same value again, JSON-quoted, because index.html emits it
+    // twice: as escaped text in <title>/og:title and as a string literal inside
+    // BOOTSTRAP_CONFIG. One variable cannot serve both quotings.
+    siteNameJson: JSON.stringify(ServerEnv.siteName()),
     sourceRepoUrl: JSON.stringify(ServerEnv.sourceRepoUrl()),
     arenaDevBypass: JSON.stringify(devBypassEnabled()),
     // [ARENA] The resolved symbol, not the raw env var: stakeMint() validates

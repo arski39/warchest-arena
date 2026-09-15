@@ -123,6 +123,7 @@ export default defineConfig(({ mode }) => {
         ? "http://localhost:9000"
         : `https://${env.DOMAIN}`,
     siteName: env.SITE_NAME || env.DOMAIN || "localhost",
+    siteNameJson: JSON.stringify(env.SITE_NAME || env.DOMAIN || "localhost"),
     sourceRepoUrl: JSON.stringify(env.SOURCE_REPO_URL ?? ""),
     // The *requested* setting, not the resolved one. resolveDevBypass() also
     // asks the cluster for its genesis hash, which a config file cannot do --

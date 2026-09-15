@@ -101,7 +101,13 @@
         arenaDevBypass: <%- arenaDevBypass %>,
         arenaStakeSymbol: <%- arenaStakeSymbol %>,
         arenaStakeMint: <%- arenaStakeMint %>,
-        arenaRpcUrl: <%- arenaRpcUrl %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
+        arenaRpcUrl: <%- arenaRpcUrl %>,
+        // [ARENA] The display name, for <site-nameplate>. Already rendered as
+        // the <title> and og:title above, but those are server-side text; the
+        // menu wordmark is a client component and needs the value itself.
+        // siteNameJson, not siteName: the title uses <%= %> (HTML-escaped)
+        // while this lands inside a script literal and must be JSON-quoted.
+        siteName: <%- siteNameJson %>,<%- typeof serverHost !== "undefined" && serverHost ? "\n        serverHost: " + serverHost + "," : "" %>
       };
       document.documentElement.style.setProperty(
         "--background-image-url",

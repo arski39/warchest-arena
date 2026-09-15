@@ -54,6 +54,10 @@ export class ClientEnv {
       // "nothing to show" rather than querying a blank endpoint.
       arenaStakeMint: bc.arenaStakeMint ?? "",
       arenaRpcUrl: bc.arenaRpcUrl ?? "",
+      // [ARENA] The display name, for the menu nameplate. Empty falls back to
+      // the host below rather than throwing: a cached index.html from before
+      // this field existed must not blank the app over a wordmark.
+      siteName: bc.siteName ?? "",
     };
     return ClientEnv.values;
   }
@@ -79,6 +83,19 @@ export class ClientEnv {
   }
   static gitCommit(): string {
     return ClientEnv.get().gitCommit;
+  }
+
+  /**
+   * [ARENA] The site's display name, single-sourced from SITE_NAME.
+   *
+   * Falls back to the hostname, matching ServerEnv.siteName()'s own fallback to
+   * DOMAIN, so the nameplate says something true even on a deployment that
+   * never set the variable.
+   */
+  static siteName(): string {
+    const name = ClientEnv.get().siteName;
+    if (name !== undefined && name !== "") return name;
+    return typeof window === "undefined" ? "" : window.location.hostname;
   }
   /**
    * [ARENA] Source repository for THIS deployment, for the footer link that
@@ -274,4 +291,6 @@ export interface ClientEnvValues {
   arenaStakeSymbol: string;
   arenaStakeMint: string;
   arenaRpcUrl: string;
+  /** [ARENA] SITE_NAME, for the menu nameplate. Empty falls back to the host. */
+  siteName: string;
 }

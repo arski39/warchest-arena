@@ -54,6 +54,8 @@ declare global {
       arenaStakeSymbol?: string;
       arenaStakeMint?: string; // [ARENA]
       arenaRpcUrl?: string; // [ARENA]
+      /** [ARENA] SITE_NAME, for the menu nameplate. */
+      siteName?: string;
     };
   }
 }

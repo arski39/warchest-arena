@@ -5,6 +5,7 @@ import "../arena/WalletBalanceCard"; // [ARENA]
 import { crazyGamesSDK } from "../CrazyGamesSDK";
 import "./CosmeticBackground";
 import "./NewsBox";
+import "./SiteNameplate"; // [ARENA]
 import "./SteamWishlist";
 import "./StreamingNow";
 
@@ -125,6 +126,14 @@ export class PlayPage extends LitElement {
           <div
             class="lg:hidden h-[calc(env(safe-area-inset-top)+56px)] -mb-4"
           ></div>
+
+          <!-- [ARENA] The wordmark. Above the identity strip and therefore
+               above the play buttons, which is where a nameplate belongs: it
+               names the page, it is not a control. Renders SITE_NAME, never a
+               literal -- see SiteNameplate.ts. Inside this wrapper rather than
+               above it so it shares the same horizontal gutter as everything
+               below and cannot drift out of alignment on mobile. -->
+          <site-nameplate></site-nameplate>
 
           <!-- [ARENA] Identity and wallet share the strip: who you are and what
                you can stake are the two things you check before picking a mode,
