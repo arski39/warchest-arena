@@ -49,3 +49,47 @@ export function forgetWalletAddress(): void {
     // Nothing to do: see above, a stale value is only ever ignored.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Which wallet APP, as opposed to which address
+// ---------------------------------------------------------------------------
+//
+// A separate key, deliberately not folded into the address above. The address is
+// a cache of a display value belonging to a session; this is a reconnect hint
+// belonging to a browser, and the two have different lifetimes — signing out
+// forgets the address, but the next visitor to this browser still has the same
+// wallet installed and should not be asked to pick it again.
+//
+// It is even less of a claim than the address is: it names a piece of software,
+// not a person. Nothing is granted on the strength of it. The only thing it
+// decides is which registered wallet `mountWalletProvider()` offers its silent
+// reconnect to, and a name that no longer matches anything in the registry is
+// simply ignored.
+const WALLET_NAME_KEY = "arena_wallet_name";
+
+/** Records which wallet app the player last connected through. */
+export function rememberWalletName(name: string): void {
+  try {
+    localStorage.setItem(WALLET_NAME_KEY, name);
+  } catch {
+    // Private mode. The cost is a picker that does not preselect, which is the
+    // pre-existing behaviour rather than a broken one.
+  }
+}
+
+/** The last wallet app connected in this browser, or null. */
+export function storedWalletName(): string | null {
+  try {
+    return localStorage.getItem(WALLET_NAME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function forgetWalletName(): void {
+  try {
+    localStorage.removeItem(WALLET_NAME_KEY);
+  } catch {
+    // See above.
+  }
+}

@@ -62,4 +62,41 @@ export default [
       ],
     },
   },
+  {
+    // [ARENA] Keep @solana/web3.js out of the MAIN bundle.
+    //
+    // Main.ts imports WalletProvider at module scope and calls
+    // mountWalletProvider() there, so every module below is in the entry chunk
+    // for every player -- including the free-to-play ones who will never stake.
+    // @solana/web3.js is ~294 kB. The lazy boundary is Main.ts's
+    // `await import("./arena/wagerJoinFlow")`, and everything Solana-shaped
+    // belongs on the far side of it.
+    //
+    // This was previously enforced only by comments in walletLogin.ts and
+    // onchainJoin.ts. One `import { Transaction }` instead of
+    // `import type { Transaction }` would have undone it silently -- nothing in
+    // tsc, lint or the test suite would have noticed. Now something does.
+    files: [
+      "src/client/arena/WalletProvider.ts",
+      "src/client/arena/walletStandard.ts",
+      "src/client/arena/walletSession.ts",
+      "src/client/arena/walletLogin.ts",
+      "src/client/arena/WalletPicker.ts",
+      "src/client/arena/WalletBalanceCard.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@solana/web3.js",
+              message:
+                "This module is in the main chunk. Import it lazily from a file behind Main.ts's wagerJoinFlow dynamic import instead -- see the note in WalletProvider.ts.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

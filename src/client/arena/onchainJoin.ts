@@ -8,6 +8,9 @@ import {
 } from "../../core/arena/arenaProgram";
 import { getConnectedWallet } from "./WalletProvider";
 
+/** Joins simulation log lines. A char code, so no quoting layer can mangle it. */
+const LOG_SEPARATOR = String.fromCharCode(10);
+
 export interface JoinMatchParams {
   programId: string; // base58 arena program id the escrow was created under
   rpcUrl: string; // public RPC endpoint (see ARENA_PUBLIC_RPC_URL)
@@ -63,6 +66,22 @@ export class StakeUnconfirmedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "StakeUnconfirmedError";
+  }
+}
+
+/**
+ * [ARENA] The connected wallet has no usable way to put a transaction on chain.
+ *
+ * Reachable even though the picker filters for it: a wallet connected for
+ * sign-in only is still what `getConnectedWallet()` returns when the stake gate
+ * opens later in the same session.
+ */
+export class WalletCannotStakeError extends Error {
+  /** Suffix of the `wager_lobby.error_*` key the panel renders. */
+  readonly code = "wallet_cannot_stake";
+  constructor(walletName: string) {
+    super(`${walletName} cannot sign transactions on this network`);
+    this.name = "WalletCannotStakeError";
   }
 }
 
@@ -280,20 +299,51 @@ export async function joinMatchOnChain(
     lastValidBlockHeight,
   }).add(ix);
 
-  const signed = await wallet.signTransaction(tx);
+  const submit = wallet.submit;
+  if (submit === null) {
+    // The picker keeps wallets that cannot stake out of the stake gate, but
+    // getConnectedWallet() can hand back one connected earlier for sign-in only.
+    throw new WalletCannotStakeError(wallet.name);
+  }
+
+  // [ARENA] requireAllSignatures/verifySignatures OFF: the transaction is
+  // unsigned at this point and a bare tx.serialize() throws "Signature
+  // verification failed" on it. This is the sharpest edge in the bytes contract.
+  const wire = tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+
   let signature: string;
-  try {
-    signature = await connection.sendRawTransaction(signed.serialize(), {
-      preflightCommitment: "confirmed",
-    });
-  } catch (e) {
-    // A refused preflight arrives as the whole simulation log. Say what the
-    // program actually objected to, and keep the log only when it is something
-    // this does not recognise.
-    const raw = e instanceof Error ? e.message : String(e);
-    const refusal = describeJoinProgramError(raw);
-    if (refusal !== null) throw new JoinRefusedError(refusal);
-    throw e;
+  if (submit.kind === "sign") {
+    const signed = await submit.signTransaction(wire);
+    try {
+      signature = await connection.sendRawTransaction(signed, {
+        preflightCommitment: "confirmed",
+      });
+    } catch (e) {
+      // A refused preflight arrives as the whole simulation log. Say what the
+      // program actually objected to, and keep the log only when it is something
+      // this does not recognise.
+      const raw = e instanceof Error ? e.message : String(e);
+      const refusal = describeJoinProgramError(raw);
+      if (refusal !== null) throw new JoinRefusedError(refusal);
+      throw e;
+    }
+  } else {
+    // [ARENA] The wallet submits this one, and its own UI collapses the
+    // program's error into "Transaction failed". Simulating first recovers the
+    // `custom program error: 0x177x` that describeJoinProgramError already knows
+    // how to read -- before the player is asked to approve anything. One extra
+    // RPC call, on a path that only mobile reaches.
+    const sim = await connection.simulateTransaction(tx);
+    if (sim.value.err !== null) {
+      const refusal = describeJoinProgramError(
+        (sim.value.logs ?? []).join(LOG_SEPARATOR),
+      );
+      if (refusal !== null) throw new JoinRefusedError(refusal);
+    }
+    signature = await submit.signAndSend(wire);
   }
 
   // Confirm before returning: the server verifies membership against chain

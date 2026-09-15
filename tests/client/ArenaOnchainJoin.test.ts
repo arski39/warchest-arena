@@ -83,6 +83,7 @@ type Handlers = {
   ata: unknown | (() => unknown);
   match: unknown | (() => unknown);
   confirm: () => unknown;
+  simulate: () => unknown;
 };
 let handlers: Handlers;
 
@@ -96,7 +97,9 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
       return typeof entry === "function" ? (entry as () => unknown)() : entry;
     }
     async getLatestBlockhash() {
-      // Valid base58, so anything that decodes it gets a real 32-byte value.
+      // 32 base58 zeros: a real 32-byte blockhash. The transaction is now
+      // genuinely serialized (the adapter takes wire bytes), so a
+      // merely-32-characters string no longer decodes.
       return { blockhash: "1".repeat(32), lastValidBlockHeight: 1 };
     }
     async sendRawTransaction() {
@@ -105,18 +108,35 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
     async confirmTransaction() {
       return handlers.confirm();
     }
+    async simulateTransaction() {
+      return handlers.simulate();
+    }
   }
   return { ...actual, Connection: FakeConnection };
 });
 
+/**
+ * The wallet's submit capability, swappable per test.
+ *
+ * Sign-only is the default and the preferred path. The signAndSend arm exists
+ * because Mobile Wallet Adapter exposes `solana:signTransaction` only
+ * optionally -- MWA 2.0 deprecates it -- so on some phones the wallet submits
+ * and we never see a preflight.
+ */
+let submit: unknown;
+
 vi.mock("../../src/client/arena/WalletProvider", () => ({
   getConnectedWallet: () => ({
     publicKey: PLAYER,
+    name: "Fake",
+    icon: "",
     signMessage: async (m: Uint8Array) => m,
-    // A real wallet hands back a SIGNED transaction, so the returned object is
-    // the one that must serialize. Echoing the unsigned input instead would
-    // throw "Signature verification failed" inside serialize().
-    signTransaction: async () => ({ serialize: () => new Uint8Array([1]) }),
+    // Wire bytes in, wire bytes out. The adapter no longer hands back a
+    // Transaction object -- its one caller always serialized anyway, and both
+    // Wallet Standard and MWA are byte APIs.
+    get submit() {
+      return submit;
+    },
   }),
 }));
 
@@ -139,6 +159,11 @@ describe("joinMatchOnChain", () => {
       ata: undefined,
       match: undefined,
       confirm: () => ({ value: { err: null } }),
+      simulate: () => ({ value: { err: null, logs: [] } }),
+    };
+    submit = {
+      kind: "sign",
+      signTransaction: async (wire: Uint8Array) => wire,
     };
   });
 
@@ -257,6 +282,11 @@ describe("readEscrowState", () => {
       ata: undefined,
       match: undefined,
       confirm: () => ({ value: { err: null } }),
+      simulate: () => ({ value: { err: null, logs: [] } }),
+    };
+    submit = {
+      kind: "sign",
+      signTransaction: async (wire: Uint8Array) => wire,
     };
   });
 
@@ -298,5 +328,62 @@ describe("readEscrowState", () => {
     // endpoint, so unreachable is routine and refusing to offer the stake
     // would strand a player who can perfectly well pay.
     await expect(readEscrowState(params, PLAYER)).resolves.toBeNull();
+  });
+});
+
+describe("a wallet that can only sign-and-send", () => {
+  // Mobile Wallet Adapter may expose no sign-only path at all, so the wallet
+  // submits and the caller never sees a preflight. Everything downstream --
+  // confirmation, then the players[] re-read -- is shared with the sign path,
+  // which is what makes this arm tractable at all.
+  beforeEach(() => {
+    handlers = {
+      ata: tokenAccount(5_000_000n),
+      match: undefined,
+      confirm: () => ({ value: { err: null } }),
+      simulate: () => ({ value: { err: null, logs: [] } }),
+    };
+  });
+
+  it("lets the wallet submit and returns its signature", async () => {
+    submit = {
+      kind: "signAndSend",
+      signAndSend: async () => "wallet-submitted-sig",
+    };
+
+    await expect(join()).resolves.toBe("wallet-submitted-sig");
+  });
+
+  it("names the program's refusal from a simulation, before the wallet prompts", async () => {
+    let prompted = false;
+    submit = {
+      kind: "signAndSend",
+      signAndSend: async () => {
+        prompted = true;
+        return "unreachable";
+      },
+    };
+    handlers.simulate = () => ({
+      value: {
+        err: { InstructionError: [2, { Custom: 6001 }] },
+        logs: [
+          "Program log: Instruction: JoinMatch",
+          "custom program error: 0x1771",
+        ],
+      },
+    });
+
+    await expect(join()).rejects.toMatchObject({ code: "not_open" });
+    // The point of simulating first: the player is told the match is full
+    // instead of approving a transaction that cannot succeed.
+    expect(prompted).toBe(false);
+  });
+
+  it("refuses a wallet that cannot put a transaction on chain at all", async () => {
+    submit = null;
+
+    await expect(join()).rejects.toMatchObject({
+      name: "WalletCannotStakeError",
+    });
   });
 });

@@ -140,7 +140,11 @@ export class WagerLobby extends LitElement {
       this.error = null;
       void this.refreshEscrow();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Wallet connection failed";
+      // Through errorText, not `e.message`: connectWallet() throws a typed
+      // WalletConnectError whose `code` names a `wager_lobby.error_*` key. It
+      // used to throw a bare English literal that was rendered raw to every
+      // player in every language.
+      this.error = this.errorText(e);
     } finally {
       this.busy = false;
     }

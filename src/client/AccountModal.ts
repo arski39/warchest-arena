@@ -901,6 +901,19 @@ export class AccountModal extends BaseModal {
             ? "account_modal.wallet_open_phantom_hint"
             : "account_modal.wallet_no_extension",
         );
+      } else if (reason === "incompatible") {
+        // [ARENA] They HAVE a wallet; it just cannot sign in here -- it altered
+        // the message before signing, authorized no account, or offers no
+        // signMessage at all. Telling them to install one would be nonsense,
+        // and saying nothing (the old behaviour, since this folded into
+        // "rejected") left the button looking broken.
+        const name = (e as { walletName?: unknown }).walletName;
+        this.walletLoginError =
+          typeof name === "string"
+            ? translateText("account_modal.wallet_incompatible", {
+                wallet: name,
+              })
+            : translateText("account_modal.wallet_incompatible_generic");
       } else {
         this.walletLoginError =
           e instanceof Error

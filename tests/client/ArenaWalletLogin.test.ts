@@ -42,16 +42,41 @@ let signCalls: string[];
  * `connected` false makes getConnectedWallet() return null so the module has to
  * go through connectWallet(), which is the path a first-time login takes.
  */
+/**
+ * The error classes walletLogin classifies on, taken from the SAME module
+ * instances it will import.
+ *
+ * `loadWalletLogin` calls `vi.resetModules()`, so a class imported at the top of
+ * a test is a different object from the one the module under test sees and every
+ * `instanceof` against it is false — which reads as "unclassified failure"
+ * rather than as a test bug. Tests therefore build their thrown errors from this
+ * kit, handed to them after the reset.
+ */
+interface ErrorKit {
+  WalletConnectError: typeof import("../../src/client/arena/WalletProvider").WalletConnectError;
+  WalletAlteredMessageError: typeof import("../../src/client/arena/walletStandard").WalletAlteredMessageError;
+}
+
+type Thrown = unknown | ((kit: ErrorKit) => unknown);
+
 async function loadWalletLogin(opts: {
   connected?: boolean;
-  connectThrows?: unknown;
-  signThrows?: unknown;
+  connectThrows?: Thrown;
+  signThrows?: Thrown;
   fetchImpl: typeof fetch;
 }) {
+  // Populated below, after vi.resetModules(); the wallet closure reads it
+  // lazily, which is what lets a thrown error come from the post-reset graph.
+  // Filled in below, after vi.resetModules(). Mutated in place rather than
+  // reassigned so the wallet closure can capture it before it has a value.
+  const kit = {} as ErrorKit;
+  const resolve = (t: Thrown): unknown =>
+    typeof t === "function" ? (t as (k: ErrorKit) => unknown)(kit) : t;
+
   const wallet = {
     publicKey: address,
     signMessage: async (msg: Uint8Array) => {
-      if (opts.signThrows !== undefined) throw opts.signThrows;
+      if (opts.signThrows !== undefined) throw resolve(opts.signThrows);
       // Uint8Array.from: keeps the bytes in this realm for tweetnacl.
       const bytes = Uint8Array.from(msg);
       signCalls.push(new TextDecoder().decode(bytes));
@@ -71,9 +96,13 @@ async function loadWalletLogin(opts: {
       // string the server parses, so mocking it would skip the encoding this
       // test exists to check end to end.
       toBase64: actual.toBase64,
+      // Real, not a stub: walletLogin() classifies on `instanceof`, so a
+      // lookalike would take the fallback branch and every connect failure
+      // would read as "incompatible" whatever it actually was.
+      WalletConnectError: actual.WalletConnectError,
       getConnectedWallet: () => (opts.connected === true ? wallet : null),
       connectWallet: async () => {
-        if (opts.connectThrows !== undefined) throw opts.connectThrows;
+        if (opts.connectThrows !== undefined) throw resolve(opts.connectThrows);
         return wallet;
       },
     };
@@ -87,6 +116,19 @@ async function loadWalletLogin(opts: {
     invalidateUserMe: () => {},
   }));
   vi.stubGlobal("fetch", opts.fetchImpl);
+
+  Object.assign(kit, {
+    WalletConnectError: (
+      await vi.importActual<
+        typeof import("../../src/client/arena/WalletProvider")
+      >("../../src/client/arena/WalletProvider")
+    ).WalletConnectError,
+    // Not mocked, so a plain import lands in the same post-reset registry the
+    // module under test reads from.
+    WalletAlteredMessageError: (
+      await import("../../src/client/arena/walletStandard")
+    ).WalletAlteredMessageError,
+  });
 
   return import("../../src/client/arena/walletLogin");
 }
@@ -191,7 +233,8 @@ describe("[ARENA] wallet login, browser half", () => {
   it("reports a missing extension distinctly, so the UI can offer an install link", async () => {
     const { walletLogin, WalletLoginError } = await loadWalletLogin({
       fetchImpl: happyFetch(),
-      connectThrows: new Error("No Solana wallet found. Install Phantom"),
+      connectThrows: (k: ErrorKit) =>
+        new k.WalletConnectError("no_wallet", null),
     });
 
     await expect(walletLogin()).rejects.toMatchObject({
@@ -199,6 +242,44 @@ describe("[ARENA] wallet login, browser half", () => {
       reason: "no-wallet",
     });
     expect(WalletLoginError).toBeTypeOf("function");
+  });
+
+  // [ARENA] The distinction this pair exists for. Before Wallet Standard
+  // discovery, "no wallet found" was the ONLY thing connectWallet() could
+  // throw, so walletLogin mapped every non-rejection failure to `no-wallet`
+  // and AccountModal rendered "Install Phantom". With discovery that sentence
+  // reaches players who have three working wallets installed and picked one
+  // that cannot sign in -- advice that is not merely useless but wrong.
+  it("does not tell a player with a wallet to install one", async () => {
+    const { walletLogin } = await loadWalletLogin({
+      fetchImpl: happyFetch(),
+      connectThrows: (k: ErrorKit) =>
+        new k.WalletConnectError("cannot_sign", "Backpack"),
+    });
+
+    await expect(walletLogin()).rejects.toMatchObject({
+      reason: "incompatible",
+      walletName: "Backpack",
+    });
+    expect(adopted).toEqual([]);
+  });
+
+  // [ARENA] A wallet that prefixes the message produces a signature this
+  // service refuses. Folding it into `rejected` was worse than a wrong
+  // message: AccountModal deliberately shows NOTHING for a rejection, because
+  // changing your mind is not a fault -- so pressing Connect did nothing
+  // visible at all, forever, for anyone using such a wallet.
+  it("names the wallet that altered the message, rather than saying nothing", async () => {
+    const { walletLogin } = await loadWalletLogin({
+      fetchImpl: happyFetch(),
+      signThrows: (k: ErrorKit) => new k.WalletAlteredMessageError("Glow"),
+    });
+
+    await expect(walletLogin()).rejects.toMatchObject({
+      reason: "incompatible",
+      walletName: "Glow",
+    });
+    expect(adopted).toEqual([]);
   });
 
   it("treats a declined signature as a choice, not a fault", async () => {

@@ -33,17 +33,31 @@ import { walletLoginMessage } from "../../core/arena/authMessage";
 import { getApiBase, invalidateUserMe } from "../Api";
 import { adoptSession } from "../Auth";
 import {
+  WalletConnectError,
   connectWallet,
   getConnectedWallet,
   toBase64,
   type WalletAdapter,
 } from "./WalletProvider";
+import { sessionIsBound } from "./sessionBinding";
 import { rememberWalletAddress } from "./walletSession";
+import { WalletAlteredMessageError } from "./walletStandard";
 
 /** Why a login attempt did not produce a session. */
 export type WalletLoginFailure =
   /** No wallet extension is installed. */
   | "no-wallet"
+  /**
+   * A wallet is present but cannot be used to sign in — it authorized no
+   * account, it cannot sign messages, or it alters the message before signing.
+   *
+   * Distinct from `no-wallet` because the remedies are opposites: one says
+   * "install a wallet", the other says "you have one, use a different one".
+   * Before discovery existed every non-rejection failure was `no-wallet`,
+   * which was true when the only wallet was Phantom's injected provider and
+   * stopped being true the moment any wallet could register.
+   */
+  | "incompatible"
   /** The player declined the connection or the signature. */
   | "rejected"
   /** The challenge could not be obtained, or had expired by the time we sent it. */
@@ -59,6 +73,8 @@ export class WalletLoginError extends Error {
   constructor(
     readonly reason: WalletLoginFailure,
     message: string,
+    /** Which wallet, when the failure is about one. Display only. */
+    readonly walletName: string | null = null,
   ) {
     super(message);
     this.name = "WalletLoginError";
@@ -76,29 +92,6 @@ function isUserRejection(e: unknown): boolean {
   if (code === 4001 || code === "4001") return true;
   const message = (e as { message?: unknown }).message;
   return typeof message === "string" && /reject|denied|cancel/i.test(message);
-}
-
-/**
- * Whether logging in right now would pull the session out from under something
- * already bound to it.
- *
- * This is the objection `docs/Auth.md` recorded as the reason wallet login was
- * deferred: a guest→wallet upgrade swaps `sub`, and therefore the persistentID,
- * and therefore any `walletRegistry` binding and any in-flight `jti`-bound match
- * signature. Restricting login to the menu dissolves it rather than managing it
- * — at the menu there is nothing bound yet.
- *
- * Both checks read the DOM rather than importing from `Main.ts`: `src/client`'s
- * entry module owns the game lifecycle and importing it here would be a cycle.
- * `in-game` is set and cleared by `Main.ts` around a running match;
- * `arena-wager-overlay` is the stake prompt, during which a `jti` has already
- * been signed over.
- */
-function sessionIsBound(): boolean {
-  return (
-    document.body.classList.contains("in-game") ||
-    document.querySelector(".arena-wager-overlay") !== null
-  );
 }
 
 async function fetchChallenge(): Promise<{ nonce: string; challenge: string }> {
@@ -151,9 +144,17 @@ export async function walletLogin(): Promise<{ walletAddress: string }> {
     if (isUserRejection(e)) {
       throw new WalletLoginError("rejected", "Wallet connection was declined.");
     }
-    // connectWallet()'s own "no wallet found" is the only other throw here.
+    // connectWallet() throws typed failures, and only one of them means the
+    // player has nothing installed. The rest describe a wallet that IS there.
+    if (e instanceof WalletConnectError) {
+      throw new WalletLoginError(
+        e.code === "no_wallet" ? "no-wallet" : "incompatible",
+        e.message,
+        e.walletName,
+      );
+    }
     throw new WalletLoginError(
-      "no-wallet",
+      "incompatible",
       e instanceof Error ? e.message : String(e),
     );
   }
@@ -165,6 +166,14 @@ export async function walletLogin(): Promise<{ walletAddress: string }> {
     const message = new TextEncoder().encode(walletLoginMessage(nonce));
     signature = toBase64(await wallet.signMessage(message));
   } catch (e) {
+    // A wallet that prefixed the message produced a signature this service will
+    // refuse, and folding that into "rejected" made sign-in do nothing visible
+    // at all -- AccountModal deliberately renders no message for a rejection,
+    // because changing your mind is not a fault. This one is, and it needs to
+    // say which wallet so the player can pick another.
+    if (e instanceof WalletAlteredMessageError) {
+      throw new WalletLoginError("incompatible", e.message, e.walletName);
+    }
     if (isUserRejection(e)) {
       throw new WalletLoginError("rejected", "Signature was declined.");
     }
