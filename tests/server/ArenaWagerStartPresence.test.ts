@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatchStatus } from "../../src/core/arena/arenaProgram";
 import { GameType } from "../../src/core/game/Game";
 import { matchRegistry } from "../../src/server/arena/matchRegistry";
+import { walletRegistry } from "../../src/server/arena/walletRegistry";
 import { GameServer } from "../../src/server/GameServer";
 
 const GAME_ID = "wagerfil";
@@ -66,8 +67,19 @@ function startsAt(game: GameServer): number | undefined {
   return (game as any).startsAt;
 }
 
-/** Connected clients, as phase() and the start gate expect to find them. */
-function connect(game: GameServer, ...clients: { spectator?: boolean }[]) {
+/**
+ * Connected clients, as phase() and the start gate expect to find them. Each
+ * is bound to its own staked wallet unless `wallet` says otherwise, as the
+ * join gate does for a staker it admits.
+ */
+function connect(
+  game: GameServer,
+  ...clients: { spectator?: boolean; wallet?: string | null }[]
+) {
+  clients.forEach((c, i) => {
+    const wallet = c.wallet === undefined ? `wallet${i}` : c.wallet;
+    if (wallet !== null) walletRegistry.bind(game.id, `p${i}`, wallet);
+  });
   (game as any).activeClients = clients.map((c, i) => ({
     clientID: `c${i}`,
     persistentID: `p${i}`,

@@ -47,53 +47,17 @@
 // a page that quotes stake tiers.
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { assetUrl } from "../../core/AssetUrls";
 import { ClientEnv } from "../ClientEnv";
+import { DISPLAY_FONT_STACK, loadDisplayFont } from "./displayFont";
 
-/** Family name the stylesheet and this component agree on. */
-export const DISPLAY_FONT_FAMILY = "Grenze Gotisch";
-
-/** Where the build publishes the face. */
-export const DISPLAY_FONT_ASSET = "fonts/GrenzeGotisch-ExtraBold.woff2";
-
-/**
- * Loads the display face once per document.
- *
- * Module-level rather than per-instance because `document.fonts` is
- * document-wide: two nameplates (or a remount) must not register the same
- * family twice. Resolves to whether the face is usable, which is what decides
- * the letter-spacing below — a blackletter and the fallback serif want
- * different tracking, and applying blackletter tracking to the fallback makes
- * it look broken rather than plain.
- */
-let loading: Promise<boolean> | null = null;
-
-export function loadDisplayFont(): Promise<boolean> {
-  if (loading !== null) return loading;
-  loading = (async () => {
-    if (typeof document === "undefined" || !("fonts" in document)) return false;
-    try {
-      const face = new FontFace(
-        DISPLAY_FONT_FAMILY,
-        `url(${JSON.stringify(assetUrl(DISPLAY_FONT_ASSET))}) format("woff2")`,
-        { display: "swap" },
-      );
-      await face.load();
-      document.fonts.add(face);
-      return true;
-    } catch {
-      // No FontFace (jsdom), a 404, or a decode failure. Either way the
-      // fallback stack renders, which is a supported state.
-      return false;
-    }
-  })();
-  return loading;
-}
-
-/** Test seam: forget that the font was loaded. Never called by app code. */
-export function resetDisplayFontForTests(): void {
-  loading = null;
-}
+// The face's plumbing lives in displayFont.ts so the sign-in picker can use it
+// without registering this element. Re-exported for existing importers.
+export {
+  DISPLAY_FONT_ASSET,
+  DISPLAY_FONT_FAMILY,
+  loadDisplayFont,
+  resetDisplayFontForTests,
+} from "./displayFont";
 
 @customElement("site-nameplate")
 export class SiteNameplate extends LitElement {
@@ -126,16 +90,19 @@ export class SiteNameplate extends LitElement {
         aria-label=${name}
       >
         <h1
-          class="m-0 text-center leading-[0.95] text-cyber-yellow
+          class="m-0 text-center leading-[0.95] text-white
                  [text-wrap:balance] break-words
                  text-[clamp(2.25rem,11vw,5.5rem)]"
-          style=${`font-family: ${JSON.stringify(DISPLAY_FONT_FAMILY)}, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;` +
+          style=${`font-family: ${DISPLAY_FONT_STACK};` +
           // Blackletter is drawn tight; the fallback serif is not. Tracking
           // that flatters one makes the other look like a rendering bug.
           (this.hasFace ? "letter-spacing:0.01em;" : "letter-spacing:-0.01em;")}
           aria-hidden="true"
         >
-          ${name}
+          <!-- Inline so a wrapped name gets the gradient per line; see
+               .arena-wordmark in styles.css. text-white above is the colour
+               if the gradient cannot be applied. -->
+          <span class="arena-wordmark">${name}</span>
         </h1>
       </div>
     `;

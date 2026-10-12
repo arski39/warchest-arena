@@ -156,6 +156,11 @@ export class HostLobbyModal extends BaseModal {
   // screen would mean a second copy of the waiting room, the client list, the
   // start timer and the share link, all of which already live here.
   @state() private duelPreset: boolean = false;
+  // [ARENA] create_game failed, so there is no lobby: the duel screen must say
+  // so instead of drawing a waiting room for a lobby that does not exist.
+  @state() private lobbyCreateFailed: boolean = false;
+  // [ARENA] The server's last read of the escrow says every seat is staked.
+  @state() private wagerFilled: boolean = false;
   // [ARENA] The tier the duel panel chose, and whether to advertise the lobby
   // so an opponent can find it. Null/false for a hand-made 1v1 from the host
   // screen, which stays a share-a-link lobby.
@@ -231,6 +236,7 @@ export class HostLobbyModal extends BaseModal {
       this.publiclyListed = lobby.listed;
     }
     this.autoStartAt = lobby.autoStartAt ?? null;
+    this.wagerFilled = lobby.wagerFilled === true; // [ARENA]
   };
 
   private getRandomString(): string {
@@ -658,6 +664,21 @@ export class HostLobbyModal extends BaseModal {
   // JoinLobbyModal, not this one -- is looking at the same screen. Only the
   // footer differs, because only what each side may DO differs.
   private renderDuelBody(secondsRemaining: number | null) {
+    if (this.lobbyCreateFailed) {
+      return html`
+        <div class="flex flex-col gap-4 items-center py-8">
+          <p class="text-amber-300 text-sm text-center">
+            ${translateText("duel.error_generic")}
+          </p>
+          <o-button
+            variant="secondary"
+            size="lg"
+            .title=${translateText("common.close")}
+            @click=${() => this.close()}
+          ></o-button>
+        </div>
+      `;
+    }
     return renderDuelWaitingRoom({
       occupants: this.clients,
       wager: this.wager,
@@ -693,7 +714,11 @@ export class HostLobbyModal extends BaseModal {
   // work. Leaving the lobby routes through end()'s not-started branch, which is
   // the single refund site -- no second refund path, per the lifecycle rules.
   private renderDuelAction(secondsRemaining: number | null) {
-    const filled = this.clients.length >= 2;
+    // [ARENA] The escrow decides "filled", not the connection count: the
+    // opponent's stake lands seconds before their socket is admitted, and from
+    // that moment leaving cannot refund anyone for 24 h. Offering "cancel and
+    // refund" in that window promised a refund that could not happen.
+    const filled = this.clients.length >= 2 || this.wagerFilled;
 
     if (!filled) {
       return html`
@@ -1214,7 +1239,12 @@ export class HostLobbyModal extends BaseModal {
           }),
         );
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        console.error("lobby creation failed", e); // [ARENA]
+        // [ARENA] Only when no lobby exists. A failure after creation (say,
+        // building the share link) leaves a real lobby the waiting room is
+        // right to show.
+        if (!this.lobbyId) this.lobbyCreateFailed = true;
         // Clear clipboard so the host doesn't accidentally share a dead link
         void navigator.clipboard.writeText("").catch(() => {});
       });
@@ -1330,6 +1360,8 @@ export class HostLobbyModal extends BaseModal {
     this.duelConfigPushed = false;
     this.duelTier = null;
     this.duelShouldList = false;
+    this.lobbyCreateFailed = false;
+    this.wagerFilled = false;
     this.wagerMaxPlayers = 16;
     this.lobbyId = "";
     this.clients = [];

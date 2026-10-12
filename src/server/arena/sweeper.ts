@@ -183,6 +183,15 @@ export async function sweepOrphanedMatches(
  * vault somebody donated into, which cancel_match leaves non-empty and no
  * amount of retrying will change; it is logged once per sweep and skipped.
  */
+// [ARENA] Matches whose close the program refused with VaultNotEmpty. That
+// refusal is permanent -- nothing can empty a terminal match's vault -- so they
+// are skipped from then on instead of taking a slot of every sweep's close
+// budget. Without this, 20 such vaults (a few lamports of donations each) at
+// the front of getProgramAccounts' order stopped every other match from ever
+// being closed. Per process, so a restart retries each once, which is harmless.
+const unclosable = new Set<string>();
+const VAULT_NOT_EMPTY = /VaultNotEmpty|0x177e\b|"Custom":6014\b/;
+
 async function reclaimTerminalMatches(
   programId: PublicKey,
   authority: PublicKey,
@@ -191,7 +200,7 @@ async function reclaimTerminalMatches(
   const terminal = [
     ...(await matchesWithStatus(programId, authority, MatchStatus.Settled)),
     ...(await matchesWithStatus(programId, authority, MatchStatus.Cancelled)),
-  ];
+  ].filter(({ pubkey }) => !unclosable.has(pubkey.toBase58()));
 
   for (const { pubkey, account } of terminal.slice(0, MAX_CLOSES_PER_SWEEP)) {
     let match: MatchAccountView;
@@ -210,10 +219,12 @@ async function reclaimTerminalMatches(
           `${pubkey.toBase58()}, rent returned tx=${txSig}`,
       );
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (VAULT_NOT_EMPTY.test(message)) unclosable.add(pubkey.toBase58());
       console.warn(
         `[arena/sweeper] could not close ${pubkey.toBase58()} ` +
           `(a donated-into vault is never empty and never will be): ` +
-          `${e instanceof Error ? e.message : String(e)}`,
+          message,
       );
     }
   }

@@ -145,6 +145,7 @@ export class GameManager {
       // only would make the behaviour depend on whether a config push had
       // landed yet.
       if (phase === GamePhase.Lobby || phase === GamePhase.Active) {
+        game.pollWagerFill();
         game.maybeAutoStartFilledWager();
       }
       if (phase === GamePhase.Active) {
@@ -160,7 +161,10 @@ export class GameManager {
           // full lobby is Active from the moment it fills, so without this the
           // 5s a duel arms would be consumed in the same tick that armed it and
           // both players would be dropped straight into the game.
-          !game.startCountdownPending()
+          !game.startCountdownPending() &&
+          // [ARENA] And everyone who staked has to be here when it runs out,
+          // not only when it was armed.
+          !game.holdForMissingStakers()
         ) {
           // Prestart tells clients to start loading the game.
           game.prestart();

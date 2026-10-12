@@ -1,8 +1,4 @@
-import {
-  PublicKey,
-  sendAndConfirmTransaction,
-  Transaction,
-} from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { createHash } from "crypto";
 import nacl from "tweetnacl";
 import {
@@ -36,22 +32,68 @@ import { walletRegistry } from "./walletRegistry";
  * submission in dev would not avoid touching the chain — it would leave real
  * staked tokens locked in a vault with no path out.
  */
+//
+// [ARENA] Retried, a bounded number of times. One RPC hiccup -- a 429, a
+// "Blockhash not found" from a lagging node, a confirmation that outlived its
+// blockhash -- used to throw out of a single attempt, which turned a verified
+// win into a 24 h refund (or an unfilled lobby's refund into a 4 h wait for the
+// sweeper) after minutes of replay CPU. Every attempt starts by re-reading the
+// escrow, so a transaction that did land is seen as Settled/Cancelled and never
+// resubmitted, and a join that landed between a read and a cancel is seen as
+// the InProgress it now is. Deterministic failures are retried too: a retry
+// costs seconds, while telling them apart from a lagging node's view (e.g. a
+// just-created winner ATA it cannot see yet) is guesswork.
+//
+// `roster` is the persistentIDs of the players the match was actually played
+// with. When given, a payout is refused unless every staker was one of them --
+// a backstop for a match that started without one of its stakers.
 export async function settle(
   gameId: string,
   winner: ClientSendWinnerMessage | null | undefined,
   allClients: ReadonlyMap<string, Client>,
+  roster?: readonly string[],
 ): Promise<void> {
   const wager = matchRegistry.get(gameId);
   if (!wager) return; // free-practice game — nothing to settle
 
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await settleOnce(gameId, wager, winner, allClients, roster);
+      return;
+    } catch (e) {
+      if (attempt >= SETTLE_ATTEMPTS) throw e;
+      const delayMs =
+        settleRetry.baseDelayMs *
+        2 ** (attempt - 1) *
+        (0.8 + Math.random() * 0.4);
+      console.warn(
+        `[arena/settler] game=${gameId} attempt ${attempt}/${SETTLE_ATTEMPTS} failed (${String(e)}); retrying in ${Math.round(delayMs)}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+const SETTLE_ATTEMPTS = 5;
+
+/** Backoff base for settle()'s retries: ~2, 4, 8, 16 s. Tests set it to 0. */
+export const settleRetry = { baseDelayMs: 2_000 };
+
+async function settleOnce(
+  gameId: string,
+  wager: WagerConfig,
+  winner: ClientSendWinnerMessage | null | undefined,
+  allClients: ReadonlyMap<string, Client>,
+  roster: readonly string[] | undefined,
+): Promise<void> {
   const match = await fetchMatchAccount(wager);
   if (match === null) {
     // Keep the registry entry: the escrow may simply not be visible on this RPC
     // yet, and dropping it discards the only pointer we hold to the pot.
-    console.error(
-      `[arena/settler] match account ${wager.matchPDA} not found for game ${gameId}`,
+    // Thrown, so settle() reads again.
+    throw new Error(
+      `match account ${wager.matchPDA} not found for game ${gameId}`,
     );
-    return;
   }
 
   if (
@@ -78,6 +120,26 @@ export async function settle(
     return;
   }
 
+  // [ARENA] A match played without one of its stakers must not pay out: that
+  // staker's pot share was never contested. The start gates are meant to make
+  // this unreachable; this is the fail-closed backstop behind them, and like
+  // every other refusal here it leaves the pot for the 24 h timeout refund.
+  if (winner && roster !== undefined) {
+    const seated = new Set(
+      roster.flatMap((pid) => {
+        const wallet = walletRegistry.get(gameId, pid);
+        return wallet === undefined ? [] : [wallet];
+      }),
+    );
+    const absent = match.players.filter((p) => !seated.has(p.toBase58()));
+    if (absent.length > 0) {
+      console.error(
+        `[arena/settler] game=${gameId}: staker(s) ${absent.map((p) => p.toBase58()).join(", ")} were not in the match that was played; refusing to pay out, pot stays in escrow at ${wager.matchPDA}`,
+      );
+      return;
+    }
+  }
+
   const winnerWallet = winner
     ? resolveWinnerWallet(gameId, winner, allClients, match)
     : null;
@@ -95,7 +157,7 @@ export async function settle(
     wager,
     match,
     winnerWallet,
-    buildScores(match, winner, allClients),
+    buildScores(gameId, match, winner, allClients),
   );
 }
 
@@ -124,7 +186,9 @@ function resolveWinnerWallet(
   }
 
   const persistentId = allClients.get(winnerClientId)?.persistentID;
-  const wallet = persistentId ? walletRegistry.get(persistentId) : undefined;
+  const wallet = persistentId
+    ? walletRegistry.get(gameId, persistentId)
+    : undefined;
   if (wallet === undefined) {
     console.error(
       `[arena/settler] no wallet registered for winner ${winnerClientId} in game ${gameId}`,
@@ -162,6 +226,7 @@ function resolveWinnerWallet(
  * onto somebody else's score.
  */
 export function buildScores(
+  gameId: string,
   match: MatchAccountView,
   winner: ClientSendWinnerMessage,
   allClients: ReadonlyMap<string, Client>,
@@ -169,7 +234,9 @@ export function buildScores(
   const byWallet = new Map<string, bigint>();
   for (const [clientId, stats] of Object.entries(winner.allPlayersStats)) {
     const persistentId = allClients.get(clientId)?.persistentID;
-    const wallet = persistentId ? walletRegistry.get(persistentId) : undefined;
+    const wallet = persistentId
+      ? walletRegistry.get(gameId, persistentId)
+      : undefined;
     if (wallet === undefined) continue;
     byWallet.set(wallet, BigInt(stats?.finalTiles ?? 0));
   }
@@ -255,14 +322,7 @@ async function payOut(
       }),
     );
 
-  const txSig = await sendAndConfirmTransaction(
-    getConnection(),
-    tx,
-    [authority],
-    {
-      commitment: "confirmed",
-    },
-  );
+  const txSig = await sendWithFreshBlockhash(tx, authority);
   console.log(
     `[arena/settler] settled game=${gameId} winner=${winner.toBase58()} tx=${txSig}`,
   );
@@ -295,8 +355,7 @@ export async function cancelAndRefund(
     await ensureTokenAccount(account, match.players[i]!, match.mint);
   }
 
-  return await sendAndConfirmTransaction(
-    getConnection(),
+  return await sendWithFreshBlockhash(
     new Transaction().add(
       buildCancelMatchIx({
         programId,
@@ -309,8 +368,7 @@ export async function cancelAndRefund(
         refundTokenAccounts,
       }),
     ),
-    [authority],
-    { commitment: "confirmed" },
+    authority,
   );
 }
 
@@ -333,8 +391,7 @@ export async function closeMatchAccount(
   match: MatchAccountView,
 ): Promise<string> {
   const authority = serverKeypair();
-  return await sendAndConfirmTransaction(
-    getConnection(),
+  return await sendWithFreshBlockhash(
     new Transaction().add(
       buildCloseMatchIx({
         programId,
@@ -343,8 +400,7 @@ export async function closeMatchAccount(
         vault: match.vault,
       }),
     ),
-    [authority],
-    { commitment: "confirmed" },
+    authority,
   );
 }
 
@@ -376,12 +432,41 @@ async function ensureTokenAccount(
 ): Promise<void> {
   if ((await getConnection().getAccountInfo(ata, "confirmed")) !== null) return;
   const authority = serverKeypair();
-  await sendAndConfirmTransaction(
-    getConnection(),
+  await sendWithFreshBlockhash(
     new Transaction().add(
       buildCreateAtaIdempotentIx(authority.publicKey, owner, mint),
     ),
-    [authority],
-    { commitment: "confirmed" },
+    authority,
   );
+}
+
+/**
+ * [ARENA] Signs with a blockhash fetched for this send and confirms against
+ * it. Not sendAndConfirmTransaction: web3.js's sendTransaction always replaces
+ * the blockhash with one from its own cache, which can be 30 s old, so a retry
+ * after an expiry could go out on the same stale hash again.
+ */
+async function sendWithFreshBlockhash(
+  tx: Transaction,
+  signer: Keypair,
+): Promise<string> {
+  const connection = getConnection();
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = signer.publicKey;
+  tx.sign(signer);
+  const signature = await connection.sendRawTransaction(tx.serialize(), {
+    preflightCommitment: "confirmed",
+  });
+  const result = await connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
+  if (result.value.err !== null) {
+    throw new Error(
+      `transaction ${signature} failed: ${JSON.stringify(result.value.err)}`,
+    );
+  }
+  return signature;
 }

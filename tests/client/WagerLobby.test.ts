@@ -26,7 +26,7 @@ vi.mock("../../src/client/arena/onchainJoin", () => ({
   joinMatchOnChain: vi.fn(),
 }));
 vi.mock("../../src/client/arena/walletAuth", () => ({
-  signAuthMessage: vi.fn(),
+  proveWallet: vi.fn(),
 }));
 vi.mock("../../src/client/Auth", () => ({ getPlayToken: vi.fn() }));
 

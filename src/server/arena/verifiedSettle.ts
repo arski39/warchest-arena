@@ -36,10 +36,25 @@ export interface VerifiedSettleLogger {
 }
 
 /**
+ * [ARENA] What settleVerified() found. `no_winner` means the replay verified
+ * but the turn log it was given contains no win yet -- the caller decides
+ * whether a later, longer log should be settled again.
+ */
+export type VerifiedSettleOutcome =
+  | "not_wagered"
+  | "unverified"
+  | "no_winner"
+  | "winner";
+
+/**
  * Decides a wagered match's payout from a server-side replay.
  *
  * Returns without touching the chain for a free-to-play game, so callers do not
  * have to ask whether a lobby was wagered before calling.
+ *
+ * `roster` (the persistentIDs of the players the match was played with) is
+ * passed through to settle(), which refuses to pay out a match one of its
+ * stakers was not in.
  */
 export async function settleVerified(
   gameId: string,
@@ -47,8 +62,9 @@ export async function settleVerified(
   allClients: ReadonlyMap<string, Client>,
   replayInput: () => ReplayInput,
   log: VerifiedSettleLogger,
-): Promise<void> {
-  if (!matchRegistry.isWagered(gameId)) return;
+  roster?: readonly string[],
+): Promise<VerifiedSettleOutcome> {
+  if (!matchRegistry.isWagered(gameId)) return "not_wagered";
 
   const started = Date.now();
   // replayInput is a thunk so a free-to-play game never pays to assemble it —
@@ -64,7 +80,7 @@ export async function settleVerified(
     });
     // Deliberately no settle() call. The stakes stay in the vault and the
     // escrow's timeout-cancel refunds them.
-    return;
+    return "unverified";
   }
 
   const replayed = verdict.winner;
@@ -100,5 +116,6 @@ export async function settleVerified(
           allPlayersStats: verdict.allPlayersStats,
         };
 
-  await settle(gameId, winner, allClients);
+  await settle(gameId, winner, allClients, roster);
+  return winner === null ? "no_winner" : "winner";
 }

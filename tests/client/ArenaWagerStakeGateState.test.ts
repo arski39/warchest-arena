@@ -30,7 +30,7 @@ const WALLET = "5miqxq62Qs3Ruc7FpyEYQuz8QWEa3Dmh9p18z7y9VdZM";
 
 const joinMatchOnChain = vi.fn();
 const readEscrowState = vi.fn();
-const signAuthMessage = vi.fn();
+const proveWallet = vi.fn();
 
 vi.mock("../../src/client/arena/WalletProvider", () => ({
   connectWallet: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock("../../src/client/arena/onchainJoin", () => ({
   readEscrowState: (...a: unknown[]) => readEscrowState(...a),
 }));
 vi.mock("../../src/client/arena/walletAuth", () => ({
-  signAuthMessage: (...a: unknown[]) => signAuthMessage(...a),
+  proveWallet: (...a: unknown[]) => proveWallet(...a),
 }));
 vi.mock("../../src/client/Auth", () => ({ getPlayToken: async () => "tok" }));
 
@@ -93,7 +93,7 @@ describe("the stake prompt against live escrow state", () => {
   beforeEach(() => {
     joinMatchOnChain.mockReset().mockResolvedValue("txsig");
     readEscrowState.mockReset();
-    signAuthMessage
+    proveWallet
       .mockReset()
       .mockResolvedValue({ walletAddress: WALLET, walletSig: "sig" });
   });
@@ -139,7 +139,7 @@ describe("the stake prompt against live escrow state", () => {
     expect(stakeButton(el)).not.toBeNull();
   });
 
-  it("does not charge a wallet that already staked, and still signs", async () => {
+  it("does not charge a wallet that already staked, and still proves the wallet", async () => {
     readEscrowState.mockResolvedValue({
       status: MatchStatus.InProgress,
       alreadyStaked: true,
@@ -158,9 +158,10 @@ describe("the stake prompt against live escrow state", () => {
 
     // No second payment...
     expect(joinMatchOnChain).not.toHaveBeenCalled();
-    // ...but the session still has to prove the wallet is this session's, and
-    // the signature is bound to the jti, so it cannot be reused from before.
-    expect(signAuthMessage).toHaveBeenCalledOnce();
+    // ...but the session still has to prove the wallet is this session's -- by
+    // a signature bound to the jti, which cannot be reused from before, or by
+    // a wallet login for that address.
+    expect(proveWallet).toHaveBeenCalledOnce();
     expect(detail.walletAddress).toBe(WALLET);
     expect(detail.onchainTxSig).toBeUndefined();
   });

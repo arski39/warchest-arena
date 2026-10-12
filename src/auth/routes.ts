@@ -14,13 +14,20 @@
 //                                JWT-bearing client.
 // Wallet login (/auth/wallet, /auth/wallet/challenge) is additive: the arena
 // verifies wallet ownership per match on its own, so a player never needs one
-// to stake.
+// to stake. A login does let the join gate skip that per-match signature for
+// the wallet it was made with (server/arena/auth.ts, sessionIsWalletLogin).
 import express, { type Express, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { walletLoginMessage } from "../core/arena/authMessage";
 import { verifyEd25519Signature } from "../core/arena/walletSignature";
 import type { AuthLog } from "./AuthLogger";
+import {
+  ARCHIVE_ID_REGEX,
+  ARCHIVE_MAX_BODY,
+  recordMatchesId,
+  type GameArchive,
+} from "./gameArchive"; // [ARENA]
 import {
   bearerToken,
   clearRefreshCookie,
@@ -69,6 +76,11 @@ export type AuthAppDeps = {
   turnstileFetch?: FetchLike;
   /** [ARENA] Dev relaxes the hostname check to localhost. */
   isDev?: boolean;
+  /**
+   * [ARENA] Game-record store. Undefined (GAME_ARCHIVE_DIR unset) leaves
+   * /game/:id unregistered, which is how this fork has always behaved.
+   */
+  gameArchive?: GameArchive;
 };
 
 /** Max JSON body. Every request here is a handful of base64 strings. */
@@ -95,7 +107,18 @@ export function createAuthApp(deps: AuthAppDeps): Express {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use(corsMiddleware(deps.isOriginAllowed));
-  app.use(express.json({ limit: MAX_BODY }));
+  // [ARENA] The archive POST carries a whole turn log and gets its own parser
+  // on its route; everything else keeps the 8 kB ceiling. A method+path test,
+  // because body-parser skips a body already parsed, so whichever runs first
+  // decides the limit.
+  const smallJson = express.json({ limit: MAX_BODY });
+  app.use((req, res, next) => {
+    if (req.method === "POST" && req.path.startsWith("/game/")) {
+      next();
+      return;
+    }
+    smallJson(req, res, next);
+  });
 
   const limiter =
     deps.rateLimit === false
@@ -384,6 +407,84 @@ export function createAuthApp(deps: AuthAppDeps): Express {
       }
 
       res.json({ status: "approved", username, clanTag: clanTag ?? null });
+    });
+  }
+
+  // [ARENA] The game-record store; see gameArchive.ts.
+  //
+  // The write needs the api key, strictly, and is not registered at all when
+  // no key is configured outside dev: with apiKeyMissingOrWrong's "empty
+  // disables the check" that would be an anonymous, disk-filling write that
+  // also lets anyone plant the replay behind a game id before its game ends.
+  // The read is public -- a replay link is shared on purpose.
+  if (deps.gameArchive !== undefined) {
+    const store = deps.gameArchive;
+    const writable = deps.apiKey !== "" || deps.isDev === true;
+    if (!writable) {
+      log.warn(
+        "GAME_ARCHIVE_DIR is set but API_KEY is empty — game records will " +
+          "not be accepted, because the write would be unauthenticated.",
+      );
+    } else {
+      app.post(
+        "/game/:id",
+        express.json({ limit: ARCHIVE_MAX_BODY }),
+        async (req, res) => {
+          if (apiKeyMissingOrWrong(req)) {
+            res.status(403).json({ error: "invalid_api_key" });
+            return;
+          }
+          const id = req.params.id;
+          if (typeof id !== "string" || !ARCHIVE_ID_REGEX.test(id)) {
+            res.status(400).json({ error: "invalid_game_id" });
+            return;
+          }
+          if (!recordMatchesId(req.body, id)) {
+            res.status(400).json({ error: "invalid_record" });
+            return;
+          }
+          try {
+            const result = await store.put(id, JSON.stringify(req.body));
+            if (result === "exists") {
+              res.status(409).json({ error: "already_archived" });
+              return;
+            }
+            res.json({ ok: true });
+          } catch (e) {
+            log.error("Failed to store game record", {
+              gameID: id,
+              error: String(e),
+            });
+            res.status(500).json({ error: "store_failed" });
+          }
+        },
+      );
+    }
+
+    app.get("/game/:id", limiter, async (req, res) => {
+      const id = req.params.id;
+      if (typeof id !== "string" || !ARCHIVE_ID_REGEX.test(id)) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      try {
+        const gz = await store.getGzipped(id);
+        if (gz === null) {
+          res.status(404).json({ error: "not_found" });
+          return;
+        }
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Content-Encoding", "gzip");
+        // Write-once, so a stored record never changes under its id.
+        res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+        res.send(gz);
+      } catch (e) {
+        log.error("Failed to read game record", {
+          gameID: id,
+          error: String(e),
+        });
+        res.status(500).json({ error: "read_failed" });
+      }
     });
   }
 

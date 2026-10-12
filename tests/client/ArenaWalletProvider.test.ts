@@ -13,6 +13,8 @@
 // cannot be paid — and would do it silently, because the switch happens in the
 // extension rather than on this page.
 
+import { PublicKey } from "@solana/web3.js";
+import nacl from "tweetnacl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientEnv } from "../../src/client/ClientEnv";
 import {
@@ -164,6 +166,7 @@ describe("which wallet gets connected", () => {
     document.body.innerHTML = "";
     document.body.className = "";
     delete (window as unknown as { phantom?: unknown }).phantom;
+    delete (window as unknown as { solana?: unknown }).solana;
     ClientEnv.reset();
   });
 
@@ -258,6 +261,122 @@ describe("which wallet gets connected", () => {
     const wallet = await provider.connectWallet();
     expect(wallet.name).toBe(provider.PHANTOM_NAME);
     expect(wallet.publicKey).toBe(ADDRESS);
+  });
+
+  it("does not offer another wallet's bare window.solana as Phantom", () => {
+    // Other wallets claim that global too. Without the isPhantom check, a
+    // player with only Trust installed saw a "Phantom" row that connected Trust.
+    const w = window as unknown as { solana?: unknown };
+    w.solana = { isConnected: false, publicKey: null };
+    expect(provider.listWallets()).toEqual([]);
+
+    w.solana = { isPhantom: true, isConnected: false, publicKey: null };
+    expect(provider.listWallets().map((r) => r.name)).toEqual([
+      provider.PHANTOM_NAME,
+    ]);
+  });
+});
+
+// [ARENA] Trust Wallet's docs do not say whether its extension registers
+// through Wallet Standard, so it is also reachable through the provider it
+// injects at window.trustwallet.solana -- the shape of the official Solana
+// wallet-adapter's Trust adapter: `isTrust`, `publicKey.toBytes()`, and a
+// `signMessage` that takes the bytes alone and returns `{ signature }`.
+describe("Trust Wallet through its injected provider", () => {
+  let provider: Provider;
+  const kp = nacl.sign.keyPair();
+  const trustAddress = new PublicKey(kp.publicKey).toBase58();
+
+  /** Installs a Trust provider whose signMessage the test can tamper with. */
+  function injectTrust(
+    sign: (msg: Uint8Array) => Uint8Array = (msg) =>
+      nacl.sign.detached(Uint8Array.from(msg), kp.secretKey),
+  ) {
+    (window as unknown as { trustwallet: unknown }).trustwallet = {
+      solana: {
+        isTrust: true,
+        isConnected: false,
+        publicKey: { toBytes: () => kp.publicKey },
+        connect: async () => {},
+        signMessage: async (msg: Uint8Array) => ({ signature: sign(msg) }),
+        signTransaction: async () => ({ serialize: () => new Uint8Array() }),
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    resetRegistryForTests();
+    localStorage.clear();
+    (window as unknown as { BOOTSTRAP_CONFIG: unknown }).BOOTSTRAP_CONFIG =
+      BOOTSTRAP;
+    ClientEnv.reset();
+    provider = await load();
+    provider.mountWalletProvider();
+  });
+
+  afterEach(() => {
+    provider.resetWalletProviderForTests();
+    resetRegistryForTests();
+    const w = window as unknown as Record<string, unknown>;
+    delete w.trustwallet;
+    delete w.solana;
+    ClientEnv.reset();
+  });
+
+  it("is listed and connects, reading its address from toBytes()", async () => {
+    injectTrust();
+    expect(provider.listWallets().map((r) => r.name)).toEqual(["Trust"]);
+
+    const wallet = await provider.connectWallet("Trust");
+    expect(wallet.name).toBe("Trust");
+    expect(wallet.publicKey).toBe(trustAddress);
+    expect(wallet.submit?.kind).toBe("sign");
+  });
+
+  it("is listed once when it both registers as 'Trust Wallet' and injects", () => {
+    injectTrust();
+    announce(fakeWallet("Trust Wallet").wallet);
+
+    expect(provider.listWallets().map((r) => r.name)).toEqual(["Trust Wallet"]);
+  });
+
+  it("returns a signature over exactly the bytes it was handed", async () => {
+    injectTrust();
+    const wallet = await provider.connectWallet("Trust");
+    const message = Uint8Array.from(
+      new TextEncoder().encode("OpenFront Arena\nLogin: n"),
+    );
+
+    const signature = await wallet.signMessage(message);
+    expect(
+      nacl.sign.detached.verify(
+        message,
+        Uint8Array.from(signature),
+        kp.publicKey,
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a signature over anything else, before it can be used", async () => {
+    // The injected API returns no signedMessage to compare, so the signature
+    // itself is verified. A prefixing wallet must fail HERE -- at the prompt --
+    // not at the server after a stake has been paid.
+    injectTrust((msg) =>
+      nacl.sign.detached(
+        Uint8Array.from([
+          ...new TextEncoder().encode("prefix:"),
+          ...Uint8Array.from(msg),
+        ]),
+        kp.secretKey,
+      ),
+    );
+    const wallet = await provider.connectWallet("Trust");
+
+    await expect(
+      wallet.signMessage(
+        Uint8Array.from(new TextEncoder().encode("OpenFront Arena\nLogin: n")),
+      ),
+    ).rejects.toMatchObject({ name: "WalletAlteredMessageError" });
   });
 });
 

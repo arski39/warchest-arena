@@ -1,5 +1,10 @@
+import { createHash } from "crypto";
 import type { TokenPayload } from "../../core/ApiSchemas";
 import { authMessage, devAuthNonce } from "../../core/arena/authMessage";
+import {
+  walletUserIdFromDigest,
+  walletUserIdPreimage,
+} from "../../core/arena/walletIdentity";
 import { verifyEd25519Signature } from "../../core/arena/walletSignature";
 import { devBypassEnabled, logBypassUse } from "./devBypass";
 
@@ -17,6 +22,35 @@ export function verifyWalletSig(
   sigBase64: string | undefined,
 ): boolean {
   return verifyEd25519Signature(authMessage(nonce), walletAddress, sigBase64);
+}
+
+/**
+ * [ARENA] True when the session is a wallet login for `walletAddress`, which
+ * proves control of that wallet as well as a per-match signature would -- so a
+ * wallet-signed-in player stakes with one wallet prompt instead of two.
+ *
+ * The proof is the login itself: the auth service mints `provider: "wallet"`
+ * only after verifying a signature over walletLoginMessage(), and derives the
+ * `sub` from the address that signed. The token's own signature has already
+ * been checked by verifyClientToken, so recomputing the id from the claimed
+ * address and comparing is the whole check. Both halves are required: the
+ * provider claim alone says nothing about *which* wallet, and the `sub` alone
+ * is not what the issuer attests it verified a signature for.
+ *
+ * What it gives up against the per-match signature is freshness: that proved
+ * control within one 15-minute access token, this proves it at login. Whoever
+ * holds the session already *is* that player everywhere else in the game, and
+ * a payout goes to the wallet, never to the session.
+ */
+export function sessionIsWalletLogin(
+  claims: TokenPayload | null,
+  walletAddress: string,
+): boolean {
+  if (claims?.provider !== "wallet") return false;
+  const digest = createHash("sha256")
+    .update(walletUserIdPreimage(walletAddress))
+    .digest();
+  return claims.sub === walletUserIdFromDigest(digest);
 }
 
 /**

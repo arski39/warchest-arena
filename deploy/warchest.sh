@@ -130,6 +130,14 @@ start_containers() {
     if [ -n "${AUTH_SIGNING_KEY:-}" ]; then
         auth_mounts=(-v "${AUTH_SIGNING_KEY}:/run/secrets/auth-signing-key.json:ro")
     fi
+    # Game records are data, not a secret: a read-write volume, so they outlive
+    # the container. GAME_ARCHIVE_DIR is the in-container path, set here for the
+    # same reason SERVER_KEYPAIR_PATH is.
+    local archive_env=()
+    if [ -n "${GAME_ARCHIVE:-}" ]; then
+        auth_mounts+=(-v "${GAME_ARCHIVE}:/data/games")
+        archive_env=(-e GAME_ARCHIVE_DIR=/data/games)
+    fi
 
     # --restart=always unconditionally. update.sh sets RESTART=no unless
     # SUBDOMAIN=main, which is wrong for us in a specific way: a wagering server
@@ -141,6 +149,7 @@ start_containers() {
         docker run -d --name "$AUTH_CONTAINER" --restart=always \
             --env-file "$RUNTIME_ENV" \
             -e AUTH_SIGNING_KEY_PATH=/run/secrets/auth-signing-key.json \
+            "${archive_env[@]}" \
             "${auth_mounts[@]}" \
             -p "127.0.0.1:${AUTH_PORT_HOST}:${AUTH_PORT:-8787}" \
             --entrypoint npm "$IMAGE:$tag" run start:auth >/dev/null
@@ -251,6 +260,17 @@ if [ -n "${AUTH_SIGNING_KEY:-}" ]; then
     check_secret "$AUTH_SIGNING_KEY" AUTH_SIGNING_KEY
 else
     warn "AUTH_SIGNING_KEY unset — no auth container will run, and the site only works with GAME_ENV=dev"
+fi
+if [ -n "${GAME_ARCHIVE:-}" ]; then
+    # By number, for the reason check_secret spells out. Docker would otherwise
+    # create a missing bind source as root, and the auth service refuses to
+    # boot on a directory it cannot write.
+    install -d -o "$CONTAINER_UID" -g "$CONTAINER_UID" -m 750 "$GAME_ARCHIVE"
+    chown "$CONTAINER_UID:$CONTAINER_UID" "$GAME_ARCHIVE"
+    ok "game records stored in $GAME_ARCHIVE"
+    [ -n "${API_KEY:-}" ] || warn "API_KEY is empty — the auth service will refuse to store game records"
+else
+    warn "GAME_ARCHIVE unset — finished games are not stored and cannot be replayed"
 fi
 
 # ------------------------------------------------------------------- the build

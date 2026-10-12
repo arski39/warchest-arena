@@ -163,6 +163,58 @@ describe("the altered-message defence", () => {
     );
   });
 
+  // [ARENA] A false "altered" verdict locks a wallet out of signing in and of
+  // staking, with no recourse -- so the check must be about the CONTENTS, and
+  // must not trip over a value that is the right bytes in another container.
+  it("accepts the same bytes arriving as a plain array", async () => {
+    const wallet = goodWallet("ArrayWallet", {
+      features: {
+        ...goodWallet("ArrayWallet").features,
+        "solana:signMessage": {
+          signMessage: async (input: { message: Uint8Array }) => [
+            {
+              signedMessage: Array.from(input.message),
+              signature: [9, 9],
+            },
+          ],
+        },
+      },
+    });
+
+    const parts = adaptStandardWallet(
+      wallet as any,
+      account(),
+      "solana:devnet",
+      () => {},
+    );
+
+    await expect(parts.signMessage(message)).resolves.toEqual(
+      new Uint8Array([9, 9]),
+    );
+  });
+
+  it("does not treat an omitted signedMessage as altered", async () => {
+    const wallet = goodWallet("Terse", {
+      features: {
+        ...goodWallet("Terse").features,
+        "solana:signMessage": {
+          signMessage: async () => [{ signature: new Uint8Array([9, 9]) }],
+        },
+      },
+    });
+
+    const parts = adaptStandardWallet(
+      wallet as any,
+      account(),
+      "solana:devnet",
+      () => {},
+    );
+
+    await expect(parts.signMessage(message)).resolves.toEqual(
+      new Uint8Array([9, 9]),
+    );
+  });
+
   it("compares bytes, not decoded strings", async () => {
     const acct = account();
     // Two different byte sequences that a lossy decoder renders identically.

@@ -89,7 +89,12 @@ import {
   getConnectedWallet,
   mountWalletProvider,
 } from "./arena/WalletProvider";
-import { rememberStakedMatch } from "./arena/wagerSession"; // [ARENA]
+import {
+  forgetStakeWallet,
+  rememberStakedMatch,
+  rememberStakeWallet,
+  stakeWallet,
+} from "./arena/wagerSession"; // [ARENA]
 import { storedWalletAddress } from "./arena/walletSession";
 mountWalletProvider();
 
@@ -792,6 +797,7 @@ class Client {
         walletAddress?: string;
         walletSig?: string;
         onchainTxSig?: string;
+        walletAuthToken?: string;
       }
   > {
     // Only a real server lobby can be wagered — replays and singleplayer never
@@ -809,19 +815,48 @@ class Client {
       return {};
     }
 
+    // [ARENA] This tab already staked into this match (a reload): go straight
+    // back in. See stakeWallet() -- the prompt is slow enough to forfeit a
+    // duel on the disconnect timer.
+    const rememberedWallet = stakeWallet(lobby.gameID);
+    if (rememberedWallet !== null) {
+      forgetStakeWallet(lobby.gameID);
+      return { walletAddress: rememberedWallet };
+    }
+
     const { wager } = await fetchLobbyWager(lobby.gameID);
     if (wager === undefined) return {};
 
     // Imported here, not at module scope: the stake gate pulls in
     // @solana/web3.js, ~300 kB that no free-to-play join has any use for. This
     // is the first line that knows the lobby is actually wagered.
-    const { promptWagerJoin } = await import("./arena/wagerJoinFlow");
+    //
+    // [ARENA] A tab opened before a redeploy asks for the old content-hashed
+    // chunk, which the new image no longer serves. Unhandled, the rejection
+    // left the player in a lobby view with no stake prompt and no join.
+    let promptWagerJoin: typeof import("./arena/wagerJoinFlow").promptWagerJoin;
+    try {
+      ({ promptWagerJoin } = await import("./arena/wagerJoinFlow"));
+    } catch (e) {
+      console.error("could not load the stake prompt", e);
+      window.dispatchEvent(
+        new CustomEvent("show-message", {
+          detail: {
+            message: translateText("wager_lobby.error_page_outdated"),
+            color: "red",
+            duration: 10000,
+          },
+        }),
+      );
+      return "cancelled";
+    }
     const staked = await promptWagerJoin(lobby.gameID, wager);
     if (staked === null) return "cancelled";
     // [ARENA] The end-of-match screen shows what this pot was worth, and by
     // then the lobby is gone -- GameStartInfo carries no escrow. This is the
     // last moment anything in the browser knows.
     rememberStakedMatch(lobby.gameID, wager);
+    rememberStakeWallet(lobby.gameID, staked.walletAddress);
     return staked;
   }
 
@@ -905,6 +940,14 @@ class Client {
     }
 
     this.lobbyHandle = newLobbyHandle;
+    // [ARENA] Admitted into a wagered match: remember the wallet again for the
+    // next reload (the fast path above consumed it).
+    const stakedWallet = wagerFields.walletAddress;
+    if (stakedWallet !== undefined) {
+      void newLobbyHandle.join.then(() =>
+        rememberStakeWallet(lobby.gameID, stakedWallet),
+      );
+    }
 
     this.lobbyHandle.prestart.then(() => {
       // The game is actually starting now (lobby wait is over). Let listeners that stay up

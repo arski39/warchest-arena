@@ -6,17 +6,14 @@ import { formatStake, winnerPayout } from "../../core/arena/stakeTiers";
 import { getPlayToken } from "../Auth";
 import { translateText } from "../Utils";
 import "../components/baseComponents/Button";
-import {
-  connectWallet,
-  getConnectedWallet,
-  phantomBrowseLink,
-} from "./WalletProvider";
+import { getConnectedWallet, phantomBrowseLink } from "./WalletProvider";
 import {
   joinMatchOnChain,
   readEscrowState,
   type EscrowState,
 } from "./onchainJoin";
-import { signAuthMessage } from "./walletAuth";
+import { proveWallet } from "./walletAuth";
+import { connectPickedWallet } from "./walletPicker";
 
 /** Emitted when the player has connected their wallet and paid the entry fee. */
 export const WAGER_JOINED_EVENT = "arena-wager-joined";
@@ -25,8 +22,14 @@ export const WAGER_CANCELLED_EVENT = "arena-wager-cancelled";
 
 export interface WagerJoinedDetail {
   walletAddress: string;
-  /** base64 ed25519 signature over the canonical auth message. */
-  walletSig: string;
+  /**
+   * base64 ed25519 signature over the canonical auth message.
+   *
+   * [ARENA] Absent when the session is a wallet login for `walletAddress`: the
+   * login already proved control of the wallet, and the server accepts it in
+   * place of this signature (`sessionIsWalletLogin`).
+   */
+  walletSig?: string;
   /**
    * Confirmed join_match transaction signature.
    *
@@ -36,6 +39,14 @@ export interface WagerJoinedDetail {
    * reading `players[]`, never by looking at a signature.
    */
   onchainTxSig?: string;
+  /**
+   * [ARENA] The access token whose jti `walletSig` was made over. The first
+   * join must carry this exact token: re-fetching one at join time can mint a
+   * new jti (userAuth refreshes 3 minutes before expiry), and a player slow at
+   * the wallet prompts then had their paid join refused as an invalid
+   * signature.
+   */
+  walletAuthToken: string;
 }
 
 /**
@@ -135,7 +146,10 @@ export class WagerLobby extends LitElement {
     }
     this.busy = true;
     try {
-      const wallet = await connectWallet();
+      // [ARENA] Asks which wallet when more than one is installed; null is the
+      // player closing the picker, which is not an error.
+      const wallet = await connectPickedWallet();
+      if (wallet === null) return;
       this.walletAddress = wallet.publicKey;
       this.error = null;
       void this.refreshEscrow();
@@ -166,10 +180,13 @@ export class WagerLobby extends LitElement {
     this.error = null;
     try {
       // Sign first. It is the cheap step, and a player who declines the
-      // signature prompt should not have already spent their stake.
+      // signature prompt should not have already spent their stake. [ARENA] A
+      // wallet-signed-in player is not prompted here at all: their login is
+      // the proof (proveWallet).
       this.status = translateText("wager_lobby.status_signing");
-      const { walletAddress, walletSig } = await signAuthMessage(
-        await getPlayToken(),
+      const walletAuthToken = await getPlayToken();
+      const { walletAddress, walletSig } = await proveWallet(
+        walletAuthToken,
         this.gameId,
       );
 
@@ -193,7 +210,7 @@ export class WagerLobby extends LitElement {
         });
         this.dispatchEvent(
           new CustomEvent<WagerJoinedDetail>(WAGER_JOINED_EVENT, {
-            detail: { walletAddress, walletSig, onchainTxSig },
+            detail: { walletAddress, walletSig, onchainTxSig, walletAuthToken },
             bubbles: true,
             composed: true,
           }),
@@ -203,7 +220,7 @@ export class WagerLobby extends LitElement {
 
       this.dispatchEvent(
         new CustomEvent<WagerJoinedDetail>(WAGER_JOINED_EVENT, {
-          detail: { walletAddress, walletSig },
+          detail: { walletAddress, walletSig, walletAuthToken },
           bubbles: true,
           composed: true,
         }),

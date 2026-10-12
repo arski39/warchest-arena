@@ -184,14 +184,21 @@ export async function userAuth(
     }
     if (Date.now() >= __expiresAt - 3 * 60 * 1000) {
       console.log("jwt expired or about to expire");
-      if (!shouldRefresh) {
+      if (shouldRefresh) {
+        await refreshJwt();
+
+        // Try to get login info again after refreshing
+        return userAuth(false);
+      }
+      // [ARENA] The refresh just failed. The 3-minute margin is a prefetch,
+      // not the expiry: a token that is still valid is still usable. Failing
+      // here made getPlayToken() fall back to the bare persistent ID, which
+      // production refuses -- locking a staked player out of their match on
+      // any reconnect that coincided with a flaky /auth/refresh.
+      if (Date.now() >= __expiresAt) {
         console.error("jwt expired and shouldRefresh is false");
         return false;
       }
-      await refreshJwt();
-
-      // Try to get login info again after refreshing
-      return userAuth(false);
     }
 
     const result = TokenPayloadSchema.safeParse(payload);
@@ -247,6 +254,14 @@ async function doRefreshJwt(): Promise<void> {
     });
     if (response.status !== 200) {
       console.error("Refresh failed", response);
+      // [ARENA] Rate limiting or a server error says nothing about the
+      // session, and this fork's /auth/refresh answers an invalid one with a
+      // new guest rather than an error status. Logging out on those cleared
+      // the refresh cookie, so even a reload came back as a different player.
+      if (response.status === 429 || response.status >= 500) {
+        dropExpiredJwt();
+        return;
+      }
       logOut();
       return;
     }
@@ -257,9 +272,18 @@ async function doRefreshJwt(): Promise<void> {
     __jwt = jwt;
   } catch (e) {
     console.error("Refresh failed", e);
-    // if server unreachable, just clear jwt
-    __jwt = null;
+    // if server unreachable, keep a token that is still valid [ARENA]
+    dropExpiredJwt();
     return;
+  }
+}
+
+// [ARENA] After a failed refresh: keep the current token while it is still
+// valid, so the next call can retry the refresh instead of the session being
+// gone.
+function dropExpiredJwt(): void {
+  if (Date.now() >= __expiresAt) {
+    __jwt = null;
   }
 }
 
@@ -372,6 +396,18 @@ export async function sendMagicLink(email: string): Promise<boolean> {
 }
 
 // WARNING: DO NOT EXPOSE THIS ID
+// [ARENA] Whether `token` stays valid for at least `ms` more. A value that is
+// not a JWT (dev's bare persistent ID) has no expiry and is always valid.
+export function tokenValidFor(token: string, ms: number): boolean {
+  let exp: number | undefined;
+  try {
+    exp = decodeJwt(token).exp;
+  } catch {
+    return true;
+  }
+  return exp === undefined || exp * 1000 - Date.now() >= ms;
+}
+
 export async function getPlayToken(): Promise<string> {
   const result = await userAuth();
   if (result !== false) return result.jwt;

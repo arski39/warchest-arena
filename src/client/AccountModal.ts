@@ -791,9 +791,7 @@ export class AccountModal extends BaseModal {
               <span class="font-bold tracking-wide"
                 >${this.walletLoginInFlight
                   ? translateText("account_modal.wallet_connecting")
-                  : phantomBrowseLink() !== null
-                    ? translateText("account_modal.wallet_open_phantom")
-                    : translateText("account_modal.wallet_login")}</span
+                  : translateText("account_modal.wallet_login")}</span
               >
             </button>
             <p class="text-white/40 text-xs text-center leading-relaxed">
@@ -866,17 +864,9 @@ export class AccountModal extends BaseModal {
   // cannot leave half the UI describing a guest who no longer exists.
   private handleWalletLogin = async (): Promise<void> => {
     if (this.walletLoginInFlight) return;
-    // [ARENA] A mobile browser tab cannot reach the Phantom app at all -- no
-    // provider is injected outside Phantom's own in-app browser -- so connect
-    // would only throw "install Phantom" at someone who has it installed.
-    // Hand off to the app instead. Safe here in a way it is not at the stake
-    // prompt: Phantom's browser is a separate context with its own session, and
-    // at the menu nothing is bound to the current one yet.
-    const deeplink = phantomBrowseLink();
-    if (deeplink !== null) {
-      window.location.href = deeplink;
-      return;
-    }
+    // [ARENA] A mobile tab with no wallet used to be sent straight to Phantom's
+    // in-app browser from here. The sign-in picker now offers that link itself,
+    // beside the other wallets that have one (walletPicker.connectForSignIn).
     this.walletLoginInFlight = true;
     this.walletLoginError = null;
     try {

@@ -341,6 +341,11 @@ export const GameInfoSchema = z.object({
   featured: z.boolean().optional(),
   // [ARENA] Set only on wagered private lobbies. Absent means free-to-play.
   wager: WagerInfoSchema.optional(),
+  // [ARENA] Wagered lobbies only: the escrow was last read as fully staked
+  // (InProgress). From then on nobody can be refunded for 24 h, so a host UI
+  // must stop offering "cancel and refund" even before the last staker's
+  // socket arrives.
+  wagerFilled: z.boolean().optional(),
 });
 
 // Browser-facing lobby info. Master/worker-internal fields (the creator hash

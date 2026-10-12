@@ -33,7 +33,7 @@ import { formatStake } from "../../core/arena/stakeTiers";
 import { sessionProvider } from "../Auth";
 import { ClientEnv } from "../ClientEnv";
 import { translateText } from "../Utils";
-import { getConnectedWallet, phantomBrowseLink } from "./WalletProvider";
+import { getConnectedWallet } from "./WalletProvider";
 import { storedWalletAddress } from "./walletSession";
 
 /** Fixed by the protocol. */
@@ -206,14 +206,8 @@ export class WalletBalanceCard extends LitElement {
    */
   private handleConnect = async (): Promise<void> => {
     if (this.connecting) return;
-    // A mobile tab cannot reach the Phantom app at all; hand off to its
-    // in-app browser instead of throwing "install Phantom" at someone who
-    // has it installed.
-    const deeplink = phantomBrowseLink();
-    if (deeplink !== null) {
-      window.location.href = deeplink;
-      return;
-    }
+    // A mobile tab with no wallet is handed to a wallet's in-app browser by
+    // the sign-in picker, which offers every wallet that has such a link.
     this.connecting = true;
     this.connectError = null;
     try {
@@ -298,9 +292,7 @@ export class WalletBalanceCard extends LitElement {
               >
                 ${this.connecting
                   ? translateText("account_modal.wallet_connecting")
-                  : phantomBrowseLink() !== null
-                    ? translateText("account_modal.wallet_open_phantom")
-                    : translateText("account_modal.wallet_login")}
+                  : translateText("account_modal.wallet_login")}
               </button>
               <!-- The same strings the account modal uses, not copies of them:
                    one action should not have two wordings that can drift. -->

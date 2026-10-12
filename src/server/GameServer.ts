@@ -44,11 +44,14 @@ import {
 } from "../core/Util";
 import { archive, finalizeGameRecord } from "./Archive";
 // [ARENA]
+import { MatchStatus } from "../core/arena/arenaProgram";
 import { matchRegistry, wagerReadyToStart } from "./arena/matchRegistry";
 // [ARENA]
 import { defaultMapsDir } from "./arena/replayRunner"; // [ARENA]
+import { fetchMatchAccount } from "./arena/rpcClient"; // [ARENA]
 import { settle as arenaSettle } from "./arena/settler";
 import { settleVerified } from "./arena/verifiedSettle"; // [ARENA]
+import { walletRegistry } from "./arena/walletRegistry"; // [ARENA]
 import { Client } from "./Client";
 import { ClientMsgRateLimiter } from "./ClientMsgRateLimiter";
 import { fetchCustomTribes } from "./CustomTribes";
@@ -106,7 +109,24 @@ export const WAGER_FULL_START_DELAY_MS = 5_000;
 export const EMPTY_LOBBY_TIMEOUT_MS = 60_000;
 
 const KICK_REASON_WAGER_NOT_FULL = "kick_reason.wager_not_full";
+// [ARENA] A wagered match that could not be started: a staker never came back
+// between prestart and start, or the start info failed to build. The escrow is
+// InProgress by then, so the stakes come back through the 24 h timeout refund.
+const KICK_REASON_WAGER_START_FAILED = "kick_reason.wager_start_failed";
 const KICK_REASON_TOO_MUCH_DATA = "kick_reason.too_much_data";
+
+// [ARENA] How long start() waits, after prestart, for a staker whose socket
+// dropped during the 2 s loading gap to reconnect before giving up. Prestarted
+// clients keep their persistentId mapping, so a reconnect is a plain rejoin.
+const WAGER_START_WAIT_MS = 15_000;
+
+// [ARENA] How long a wagered lobby's host may be away before an unfilled lobby
+// is closed and refunded. Long enough to reload or stake from a fresh socket.
+const WAGER_HOST_AWAY_MS = 60_000;
+
+// [ARENA] How often an unfilled wagered lobby with someone in it re-reads its
+// escrow (pollWagerFill).
+const WAGER_FILL_POLL_MS = 10_000;
 
 // Messages that speak for a player in the simulation, so a spectator may not
 // send them — including hash, which feeds desync agreement. Ping and rejoin
@@ -214,6 +234,21 @@ export class GameServer {
   // the host gets to connect: create_game returns before the browser opens its
   // socket, and the join goes through the Turnstile widget first.
   private lastOccupiedAt = Date.now();
+
+  // [ARENA] Wagered-lobby bookkeeping. creatorAdmitted: whether the host has
+  // been admitted at all -- a duel host's first socket opens only after the
+  // whole stake flow, which routinely outlasts EMPTY_LOBBY_TIMEOUT_MS.
+  // hostAwaySince: when the host of an unstarted wagered lobby was last seen
+  // leaving (undefined while present). wagerStartWaitUntil: how long start()
+  // keeps waiting for a staker who dropped after prestart. chainReadInFlight:
+  // at most one escrow read at a time per lobby.
+  private creatorAdmitted = false;
+  private hostAwaySince?: number;
+  private wagerStartWaitUntil?: number;
+  private chainReadInFlight = false;
+  // [ARENA] Set when a vote-triggered settlement found no winner in the turn
+  // log it was given, so end() settles again on the complete log.
+  private wagerResettleOnEnd = false;
 
   // Featured lobbies: a label shown instead of the map name, an accent for the
   // row, and a longer auto-start deadline. Set once at create_game by an
@@ -603,6 +638,16 @@ export class GameServer {
             error: "the host cannot kick players in a publicly listed lobby",
           });
         }
+        // [ARENA] Everyone in a wagered lobby has paid for their seat. A host
+        // who kicks a staker after the escrow filled keeps them out of a match
+        // their stake is locked into: the presence gate then never starts it,
+        // and the pot waits out the 24 h refund.
+        if (matchRegistry.isWagered(this.id) && !actor.isAdmin) {
+          return finish({
+            status: 403,
+            error: "the host cannot kick players in a wagered match",
+          });
+        }
         // Resolve the target to a clientID: an explicit clientID, or an account
         // publicId matched against allClients (a superset of activeClients that
         // retains disconnected players), so a disconnected account can still be
@@ -663,6 +708,18 @@ export class GameServer {
             error: "cannot enable host cheats in a publicly listed lobby",
           });
         }
+        // [ARENA] Nor in a wagered one, listed or not: the opponent's stake is
+        // locked in the moment it lands, so they cannot leave a lobby whose
+        // host has just granted themselves an advantage.
+        if (
+          matchRegistry.isWagered(this.id) &&
+          hostCheatsEnabled(stamped.config.hostCheats)
+        ) {
+          return finish({
+            status: 409,
+            error: "cannot enable host cheats in a wagered lobby",
+          });
+        }
         this.updateGameConfig(stamped.config);
         return finish({ status: 200 });
       }
@@ -685,7 +742,12 @@ export class GameServer {
         // last seat is staked, and settle_match accepts nothing else. Starting
         // anyway would guarantee a refund for a match that was actually played.
         // Disarming (startsAt already set) is always allowed.
-        if (!this.startsAt && !wagerReadyToStart(this.id)) {
+        // [ARENA] Likewise a staker who is not here: arming on chain state
+        // alone starts a match one of its stakers cannot play.
+        if (
+          !this.startsAt &&
+          (!wagerReadyToStart(this.id) || this.wagerSeatsMissing())
+        ) {
           const state = matchRegistry.chainState(this.id);
           this.log.info("blocked start of an underfilled wagered lobby", {
             gameID: this.id,
@@ -721,6 +783,17 @@ export class GameServer {
           return finish({
             status: 403,
             error: "the host cannot pause a publicly listed game",
+          });
+        }
+        // [ARENA] Pausing stops every clock and win condition and only the
+        // host can lift it, so in a wagered match it is a way out of a loss:
+        // wait for the opponent to give up and leave, then unpause into a
+        // disconnect win -- or sit it out to the max duration, after which
+        // the pot can only be refunded.
+        if (matchRegistry.isWagered(this.id) && !actor.isAdminBot) {
+          return finish({
+            status: 403,
+            error: "a wagered match cannot be paused",
           });
         }
         // Pausing only makes sense once the game is running.
@@ -893,6 +966,11 @@ export class GameServer {
     this.websockets.add(client.ws);
     this.persistentIdToClientId.set(client.persistentID, client.clientID);
     this.admittedPersistentIds.add(client.persistentID);
+    // [ARENA]
+    if (client.persistentID === this.creatorPersistentID) {
+      this.creatorAdmitted = true;
+      this.hostAwaySince = undefined;
+    }
     this.activeClients.push(client);
     client.lastPing = Date.now();
     // Registered before the first markClientDisconnected: that call consults the
@@ -949,6 +1027,10 @@ export class GameServer {
       (c) => c.clientID !== client.clientID,
     );
     this.activeClients.push(client);
+    // [ARENA]
+    if (persistentID === this.creatorPersistentID) {
+      this.hostAwaySince = undefined;
+    }
     if (identityUpdate && !this.hasStarted()) {
       // The verified badge vouches for the exact join name — a pre-start
       // identity change under it must drop the badge (the rejoin path skips
@@ -1180,6 +1262,21 @@ export class GameServer {
     }
     // Remove persistentId if the game has not started to prevent going over max players
     this.persistentIdToClientId.delete(client.persistentID);
+    // [ARENA] Not for a wagered lobby. Its host's socket closes in the normal
+    // course of things: staking into a lobby the host is already in replaces
+    // their connection (Main stops the old handle before opening the staked
+    // one), and a reload or a network blip does the same. Closing on that
+    // destroyed every manually staked lobby at its host's own stake, and
+    // closed a filled duel -- escrow InProgress, so no refund for 24 h -- on
+    // any blip from the host. phase() closes a wagered lobby whose host stays
+    // away, and only once a fresh read shows the escrow can still be refunded;
+    // the empty-lobby reap covers the rest.
+    if (matchRegistry.isWagered(this.id)) {
+      if (client.persistentID === this.creatorPersistentID) {
+        this.hostAwaySince = Date.now();
+      }
+      return;
+    }
     // Close lobby when host leaves before game starts: without a host it can
     // never start, and a listed one would haunt the lobby browser and hold
     // the creator's one-listing quota. phase() reports Finished once ended,
@@ -1266,8 +1363,24 @@ export class GameServer {
   // Deliberately does not refund inline: setting _hasEnded makes phase() report
   // Finished, GameManager then calls end(), and end()'s not-started branch is
   // the single place the refund is issued. One refund site, not two.
+  //
+  // [ARENA] Only on a read of the escrow taken at or after the deadline. The
+  // cached state is refreshed by joins, so it can say Open minutes after the
+  // last stake filled the escrow -- e.g. when that staker's socket join is
+  // still in flight, or was refused after they paid. Cancelling on that
+  // abandoned an InProgress pot for 24 h while telling the host it had been
+  // refunded. Until a fresh read lands this returns true without cancelling:
+  // GameManager neither starts nor ends the lobby that tick.
   public cancelUnfilledWageredMatch(): boolean {
     if (wagerReadyToStart(this.id)) {
+      return false;
+    }
+    const status = this.wagerStatusReadSince(this.startsAt ?? Date.now());
+    if (status === undefined) {
+      return true;
+    }
+    if (status === MatchStatus.InProgress) {
+      // Filled after all; the presence gate decides when it starts.
       return false;
     }
     const state = matchRegistry.chainState(this.id);
@@ -1423,6 +1536,27 @@ export class GameServer {
     if (this._hasStarted || this._hasEnded) {
       return;
     }
+    // [ARENA] The roster freezes below, from whoever is connected now. A
+    // staker whose socket dropped in the 2 s after prestart would be left out
+    // of a match their stake is riding on, and the other player paid their
+    // pot. Prestarted clients keep their mapping, so give them a bounded
+    // window to rejoin; past it the match cannot fairly start at all.
+    if (this.wagerSeatsMissing()) {
+      const now = Date.now();
+      this.wagerStartWaitUntil ??= now + WAGER_START_WAIT_MS;
+      if (now < this.wagerStartWaitUntil) {
+        setTimeout(() => {
+          try {
+            this.start();
+          } catch (error) {
+            this.log.error(`error starting game ${this.id}: ${error}`);
+          }
+        }, 1000);
+      } else {
+        this.abortWageredStart("a staker did not return after prestart");
+      }
+      return;
+    }
     this._hasStarted = true;
     this._startTime = Date.now();
     // Set last ping to start so we don't immediately stop the game
@@ -1460,6 +1594,11 @@ export class GameServer {
     if (!result.success) {
       const error = z.prettifyError(result.error);
       this.log.error("Error parsing game start info", { message: error });
+      // [ARENA] _hasStarted is already set, so without this a wagered match
+      // sat on the loading screen until everyone left, holding its escrow.
+      if (matchRegistry.isWagered(this.id)) {
+        this.abortWageredStart("game start info failed to parse");
+      }
       return;
     }
     this.gameStartInfo = result.data satisfies GameStartInfo;
@@ -1730,7 +1869,10 @@ export class GameServer {
         ws.close(1000, "game has ended");
       }
     });
-    if (!this._hasPrestarted && !this._hasStarted) {
+    // [ARENA] Keyed on the start info, not the flags: a game that prestarted
+    // but never started, or whose start() failed, has none, and archiveGame()
+    // threw on it -- which for a wagered match meant settlement never ran.
+    if (this.gameStartInfo === undefined) {
       this.log.info(`game not started, not archiving game`);
       // [ARENA] Settlement normally rides on archiveGame(), which this early
       // return skips — so without this, an abandoned or cancelled wagered lobby
@@ -1752,6 +1894,12 @@ export class GameServer {
         this.log.info("game already archived", {
           gameID: this.id,
         });
+        // [ARENA] The vote-triggered settlement found no winner in the turn
+        // log it was handed; settle again now that the log is complete.
+        if (this.wagerResettleOnEnd) {
+          this.wagerResettleOnEnd = false;
+          this.settleWager(this.playerRecords(), true);
+        }
       } else {
         this.archiveGame();
       }
@@ -1834,11 +1982,21 @@ export class GameServer {
     // Reporting Finished is all this does. GameManager.tick() calls end(),
     // which for a lobby that never started routes to refundWageredLobby() --
     // the one refund site. No second cancellation path.
+    //
+    // [ARENA] A wagered lobby whose host has never been admitted gets longer:
+    // a duel host's first socket opens only after the whole stake flow --
+    // wallet connect, sign, approve, confirm on a public RPC -- which routinely
+    // takes more than a minute, and reaping under them cancelled the escrow of
+    // the duel they had just created.
+    const emptyWindow =
+      matchRegistry.isWagered(this.id) && !this.creatorAdmitted
+        ? HOSTED_LOBBY_AUTO_START_MS
+        : EMPTY_LOBBY_TIMEOUT_MS;
     if (
       !this.isPublic() &&
       !this.hasStarted() &&
       noActive &&
-      now > this.lastOccupiedAt + EMPTY_LOBBY_TIMEOUT_MS
+      now > this.lastOccupiedAt + emptyWindow
     ) {
       this.log.info("lobby empty past its grace window, closing", {
         gameID: this.id,
@@ -1847,6 +2005,9 @@ export class GameServer {
     }
     if (!noActive) {
       this.lastOccupiedAt = now;
+    }
+    if (this.wagerHostGone(now)) {
+      return GamePhase.Finished;
     }
 
     const lessThanLifetime = this.startsAt ? Date.now() < this.startsAt : true;
@@ -1918,6 +2079,10 @@ export class GameServer {
       label: this.label,
       accent: this.accent,
       featured: this.featured ? true : undefined,
+      // [ARENA]
+      wagerFilled: matchRegistry.isWagered(this.id)
+        ? wagerReadyToStart(this.id)
+        : undefined,
     };
   }
 
@@ -2059,9 +2224,7 @@ export class GameServer {
     //
     // Seats, not connections: a spectator holds none and must not be able to
     // stand in for a staker who has not arrived.
-    const seats = matchRegistry.chainState(this.id)?.maxPlayers;
-    const present = this.activeClients.filter((c) => !c.spectator).length;
-    if (seats !== undefined && present < seats) {
+    if (this.wagerSeatsMissing()) {
       return;
     }
     this.log.info("wagered lobby filled, starting itself", {
@@ -2069,6 +2232,160 @@ export class GameServer {
       delayMs: WAGER_FULL_START_DELAY_MS,
     });
     this.setStartsAt(Date.now() + WAGER_FULL_START_DELAY_MS);
+  }
+
+  // [ARENA] Whether this session has a live connection to the lobby.
+  public isPersistentIdConnected(persistentId: string): boolean {
+    return this.activeClients.some((c) => c.persistentID === persistentId);
+  }
+
+  // [ARENA] Whether a wagered lobby is missing one of the stakers it needs to
+  // start. Counts distinct staked wallets among the connected players, not
+  // connections: a spectator holds no seat, and two sessions on one wallet
+  // are one stake. False for a free lobby.
+  //
+  // Asked at every point a wagered match can be committed to starting --
+  // arming the countdown, the countdown running out, and start() itself --
+  // because a staker can drop at any of them. Checking only when the countdown
+  // armed let a player who reloaded during the 5 s countdown be left out of
+  // the frozen roster, and their stake paid to the other player.
+  public wagerSeatsMissing(): boolean {
+    if (!matchRegistry.isWagered(this.id)) return false;
+    const seats = matchRegistry.chainState(this.id)?.maxPlayers;
+    if (seats === undefined) return true;
+    const wallets = new Set<string>();
+    for (const c of this.activeClients) {
+      if (c.spectator) continue;
+      const wallet = walletRegistry.get(this.id, c.persistentID);
+      if (wallet !== undefined) wallets.add(wallet);
+    }
+    return wallets.size < seats;
+  }
+
+  // [ARENA] Called by GameManager when a wagered lobby's countdown has run
+  // out, in place of prestarting it. Returns true, and disarms the countdown,
+  // when a staker is not here: maybeAutoStartFilledWager re-arms a fresh one
+  // once everyone is back.
+  public holdForMissingStakers(): boolean {
+    if (!this.wagerSeatsMissing()) return false;
+    if (this.startsAt !== undefined) {
+      this.log.warn("wagered countdown ran out with a staker absent; waiting", {
+        gameID: this.id,
+      });
+      this.startsAt = undefined;
+    }
+    return true;
+  }
+
+  // [ARENA] Reads the escrow and records it, at most one read at a time. The
+  // observation is stamped with the time the read was ASKED for, so that a
+  // read can never count as fresher than it is.
+  private requestChainRead(): void {
+    const wager = matchRegistry.get(this.id);
+    if (wager === undefined || this.chainReadInFlight) return;
+    this.chainReadInFlight = true;
+    const askedAt = Date.now();
+    fetchMatchAccount(wager)
+      .then((match) => {
+        if (match === null) return;
+        matchRegistry.recordChainState(this.id, {
+          status: match.status,
+          playerCount: match.playerCount,
+          maxPlayers: match.maxPlayers,
+          observedAt: askedAt,
+        });
+      })
+      .catch((e: unknown) =>
+        this.log.warn("[arena] escrow read failed", {
+          gameID: this.id,
+          error: String(e),
+        }),
+      )
+      .finally(() => {
+        this.chainReadInFlight = false;
+      });
+  }
+
+  // [ARENA] Keeps the cached fill state current while an unstarted wagered
+  // lobby waits to fill, so lobby_info (and the host's cancel button) learns
+  // that the last stake landed without waiting for that staker's socket.
+  // Called from GameManager's tick; at most one read per WAGER_FILL_POLL_MS.
+  public pollWagerFill(): void {
+    if (
+      this.hasStarted() ||
+      this._hasEnded ||
+      !matchRegistry.isWagered(this.id) ||
+      wagerReadyToStart(this.id) ||
+      this.activeClients.length === 0
+    ) {
+      return;
+    }
+    const state = matchRegistry.chainState(this.id);
+    if (
+      state !== undefined &&
+      Date.now() - state.observedAt < WAGER_FILL_POLL_MS
+    ) {
+      return;
+    }
+    this.requestChainRead();
+  }
+
+  // [ARENA] The escrow's status as read at or after `since`, or undefined
+  // (with a read requested) when no read that recent is cached. For decisions
+  // that end a wagered lobby: the join-time cache can be minutes old, and an
+  // escrow that filled since then can no longer be refunded.
+  private wagerStatusReadSince(since: number): MatchStatus | undefined {
+    const state = matchRegistry.chainState(this.id);
+    if (state !== undefined && state.observedAt >= since) return state.status;
+    this.requestChainRead();
+    return undefined;
+  }
+
+  // [ARENA] Closes an unstarted wagered lobby whose host has been away for
+  // WAGER_HOST_AWAY_MS, through end()'s refund, but only on a fresh read that
+  // the escrow is not InProgress. A filled match waits for its host instead:
+  // closing it could not refund anyone for 24 h.
+  private wagerHostGone(now: number): boolean {
+    if (
+      this.hostAwaySince === undefined ||
+      this.hasStarted() ||
+      !matchRegistry.isWagered(this.id) ||
+      now < this.hostAwaySince + WAGER_HOST_AWAY_MS
+    ) {
+      return false;
+    }
+    const status = this.wagerStatusReadSince(
+      this.hostAwaySince + WAGER_HOST_AWAY_MS,
+    );
+    if (status === undefined || status === MatchStatus.InProgress) {
+      return false;
+    }
+    this.log.info("host of a wagered lobby did not come back, closing", {
+      gameID: this.id,
+    });
+    for (const c of [...this.activeClients]) {
+      this.kickClient(c.clientID, KICK_REASON_HOST_LEFT);
+    }
+    this._hasEnded = true;
+    return true;
+  }
+
+  // [ARENA] A wagered match that cannot be started any more. Ends the lobby;
+  // end() then finds no start info and routes to the refund path, which
+  // leaves an InProgress escrow for its 24 h timeout refund.
+  private abortWageredStart(reason: string): void {
+    this.log.error(
+      "[arena] wagered match could not start; stakes refund on the escrow's timeout",
+      {
+        gameID: this.id,
+        matchPDA: matchRegistry.get(this.id)?.matchPDA,
+        reason,
+      },
+    );
+    for (const c of [...this.activeClients]) {
+      this.kickClient(c.clientID, KICK_REASON_WAGER_START_FAILED);
+    }
+    this._hasEnded = true;
   }
 
   // [ARENA] Whether an armed start countdown still has time left on it.
@@ -2082,6 +2399,12 @@ export class GameServer {
 
   public maybeAutoStartListed(): void {
     if (this.hasStarted() || this.startsAt !== undefined) {
+      return;
+    }
+    // [ARENA] A filled wager starts itself once its stakers are present
+    // (maybeAutoStartFilledWager); the listing deadline must not start it
+    // without them.
+    if (matchRegistry.isWagered(this.id) && wagerReadyToStart(this.id)) {
       return;
     }
     const deadline = this.autoStartAt();
@@ -2216,61 +2539,12 @@ export class GameServer {
       winner: this.winner?.winner,
     });
 
-    // Players must stay in the same order as the game start info.
-    const playerRecords: PlayerRecord[] = this.gameStartInfo.players.map(
-      (player) => {
-        const stats = this.winner?.allPlayersStats[player.clientID];
-        if (stats === undefined) {
-          this.log.warn(`Unable to find stats for clientID ${player.clientID}`);
-        }
-        return {
-          clientID: player.clientID,
-          username: player.username,
-          clanTag: player.clanTag,
-          persistentID:
-            this.allClients.get(player.clientID)?.persistentID ?? "",
-          stats,
-          cosmetics: player.cosmetics,
-          // Simulation inputs: teamIndex pins matchmade teams, friends bias
-          // team grouping, isLobbyCreator gates host cheats. Replays rebuild
-          // GameStartInfo from these records, so dropping any of them makes
-          // the replay diverge from the recorded hashes (desync errors).
-          teamIndex: player.teamIndex,
-          friends: player.friends,
-          isLobbyCreator: player.isLobbyCreator,
-        } satisfies PlayerRecord;
-      },
-    );
+    const playerRecords = this.playerRecords();
     // [ARENA] Phase 4: settle a wagered game on the winner the SERVER derives
     // by replaying its own turn log, not on `this.winner`, which is whatever a
     // majority of clients reported. The vote is still passed in, but only so a
     // disagreement can be logged — it never decides a payout.
-    //
-    // Fire-and-forget on purpose. Verification is CPU-bound and runs for
-    // minutes on its own thread; archiving must not wait for it, and nothing
-    // downstream of archiveGame depends on the outcome. A refusal leaves the
-    // pot escrowed for the program's 24h timeout-cancel to refund.
-    settleVerified(
-      this.id,
-      this.winner,
-      this.allClients,
-      () => ({
-        gameID: this.id,
-        lobbyCreatedAt: this.createdAt,
-        config: this.gameStartInfo.config,
-        players: playerRecords,
-        tribes: this.gameStartInfo.tribes,
-        // The full log, not the filtered form createPartialGameRecord builds.
-        turns: this.turns,
-        mapsDir: defaultMapsDir(),
-      }),
-      this.log,
-    ).catch((e: unknown) =>
-      this.log.error("[arena] settlement failed", {
-        gameID: this.id,
-        error: String(e),
-      }),
-    );
+    this.settleWager(playerRecords, this._hasEnded);
 
     this.replayArchiveAttempted = true;
     archive(
@@ -2291,6 +2565,77 @@ export class GameServer {
     );
   }
 
+  private playerRecords(): PlayerRecord[] {
+    // Players must stay in the same order as the game start info.
+    return this.gameStartInfo.players.map((player) => {
+      const stats = this.winner?.allPlayersStats[player.clientID];
+      if (stats === undefined) {
+        this.log.warn(`Unable to find stats for clientID ${player.clientID}`);
+      }
+      return {
+        clientID: player.clientID,
+        username: player.username,
+        clanTag: player.clanTag,
+        persistentID: this.allClients.get(player.clientID)?.persistentID ?? "",
+        stats,
+        cosmetics: player.cosmetics,
+        // Simulation inputs: teamIndex pins matchmade teams, friends bias
+        // team grouping, isLobbyCreator gates host cheats. Replays rebuild
+        // GameStartInfo from these records, so dropping any of them makes
+        // the replay diverge from the recorded hashes (desync errors).
+        teamIndex: player.teamIndex,
+        friends: player.friends,
+        isLobbyCreator: player.isLobbyCreator,
+      } satisfies PlayerRecord;
+    });
+  }
+
+  // [ARENA] Fire-and-forget on purpose. Verification is CPU-bound and runs for
+  // minutes on its own thread; archiving must not wait for it, and nothing
+  // downstream of archiveGame depends on the outcome. A refusal leaves the pot
+  // escrowed for the program's 24h timeout-cancel to refund.
+  //
+  // `finalLog` says whether the turn log is complete (the game has ended). A
+  // settlement triggered by the winner vote runs on the log as it stands, and
+  // a vote can come early -- a lone voter while the other player's socket is
+  // down -- so a replay that finds no winner there is not the last word: it is
+  // settled again on the complete log, either here once the game has ended or
+  // from end().
+  private settleWager(playerRecords: PlayerRecord[], finalLog: boolean): void {
+    settleVerified(
+      this.id,
+      this.winner,
+      this.allClients,
+      () => ({
+        gameID: this.id,
+        lobbyCreatedAt: this.createdAt,
+        config: this.gameStartInfo.config,
+        players: playerRecords,
+        tribes: this.gameStartInfo.tribes,
+        // The full log, not the filtered form createPartialGameRecord builds.
+        // Copied, so a settlement started mid-game replays a fixed log.
+        turns: [...this.turns],
+        mapsDir: defaultMapsDir(),
+      }),
+      this.log,
+      playerRecords.flatMap((p) => (p.persistentID ? [p.persistentID] : [])),
+    )
+      .then((outcome) => {
+        if (outcome !== "no_winner" || finalLog) return;
+        if (this._hasEnded) {
+          this.settleWager(playerRecords, true);
+        } else {
+          this.wagerResettleOnEnd = true;
+        }
+      })
+      .catch((e: unknown) =>
+        this.log.error("[arena] settlement failed", {
+          gameID: this.id,
+          error: String(e),
+        }),
+      );
+  }
+
   private handleSynchronization() {
     if (this.activeClients.length <= 1) {
       return;
@@ -2306,6 +2651,20 @@ export class GameServer {
       this.findOutOfSyncClients(lastHashTurn);
 
     if (outOfSyncClients.length === 0) {
+      // [ARENA] For a wagered match, record only a hash at least two players
+      // actually reported. This is evaluated once, shortly after the turn is
+      // sent, and when only one client has reported by then, its value used to
+      // be stored as the agreed one -- which any client can plant by sending
+      // a hash for an upcoming turn. The settlement replay refuses on a
+      // mismatch, so one planted value voided the other player's win.
+      if (
+        matchRegistry.isWagered(this.id) &&
+        this.activeClients.filter(
+          (c) => !c.spectator && c.hashes.get(lastHashTurn) === mostCommonHash,
+        ).length < 2
+      ) {
+        return;
+      }
       this.turns[lastHashTurn].hash = mostCommonHash;
       return;
     }
@@ -2394,6 +2753,12 @@ export class GameServer {
 
   private handleWinner(client: Client, clientMsg: ClientSendWinnerMessage) {
     if (
+      // [ARENA] Nothing has been played before start. A lone host in an
+      // unstarted lobby is a majority of one, so a crafted vote set
+      // this.winner, archiveGame() then threw on the missing start info, and
+      // end() later skipped the real game's settlement as "already archived".
+      !this._hasStarted ||
+      this.gameStartInfo === undefined ||
       this.outOfSyncClients.has(client.clientID) ||
       this.isKicked(client.clientID) ||
       this.winner !== null ||

@@ -61,6 +61,7 @@ type Thrown = unknown | ((kit: ErrorKit) => unknown);
 
 async function loadWalletLogin(opts: {
   connected?: boolean;
+  dismissed?: boolean;
   connectThrows?: Thrown;
   signThrows?: Thrown;
   fetchImpl: typeof fetch;
@@ -101,12 +102,18 @@ async function loadWalletLogin(opts: {
       // would read as "incompatible" whatever it actually was.
       WalletConnectError: actual.WalletConnectError,
       getConnectedWallet: () => (opts.connected === true ? wallet : null),
-      connectWallet: async () => {
-        if (opts.connectThrows !== undefined) throw resolve(opts.connectThrows);
-        return wallet;
-      },
     };
   });
+  // [ARENA] Sign-in always opens the picker, which needs a real DOM; it has its
+  // own suite (ArenaWalletPicker.test.ts). Here it stands for "the player chose
+  // a wallet and connecting it did this" -- or, with `dismissed`, closed it.
+  vi.doMock("../../src/client/arena/walletPicker", () => ({
+    connectForSignIn: async () => {
+      if (opts.dismissed === true) return null;
+      if (opts.connectThrows !== undefined) throw resolve(opts.connectThrows);
+      return wallet;
+    },
+  }));
   vi.doMock("../../src/client/Auth", () => ({
     adoptSession: (jwt: string, expiresIn: number) =>
       adopted.push({ jwt, expiresIn }),
@@ -293,6 +300,22 @@ describe("[ARENA] wallet login, browser half", () => {
 
     await expect(walletLogin()).rejects.toMatchObject({ reason: "rejected" });
     expect(adopted).toEqual([]);
+  });
+
+  it("treats closing the wallet picker as a choice, and asks the service nothing", async () => {
+    // Also what leaving for a wallet's in-app browser looks like from here.
+    let fetched = false;
+    const { walletLogin } = await loadWalletLogin({
+      dismissed: true,
+      fetchImpl: (async () => {
+        fetched = true;
+        throw new Error("should not fetch");
+      }) as unknown as typeof fetch,
+    });
+
+    await expect(walletLogin()).rejects.toMatchObject({ reason: "rejected" });
+    expect(fetched).toBe(false);
+    expect(signCalls).toEqual([]);
   });
 
   it("tells an expired challenge apart from a refusal", async () => {

@@ -1,5 +1,6 @@
 import { MatchStatus } from "../../core/arena/arenaProgram";
 import type { PublicWagerSummary } from "../../core/Schemas";
+import { walletRegistry } from "./walletRegistry";
 
 export interface WagerConfig {
   matchPDA: string; // base58 Solana account address
@@ -128,10 +129,26 @@ export const matchRegistry = {
   unregister(gameId: string): void {
     registry.delete(gameId);
     observed.delete(gameId);
+    walletRegistry.clearGame(gameId);
   },
 
-  /** Records what the join gate just read from chain. */
+  /**
+   * Records a read of the escrow. Never moves backwards: an escrow only ever
+   * goes Open -> InProgress -> Settled/Cancelled and only gains stakers, so an
+   * older-looking read is a lagging RPC node, not news. Taking it would let a
+   * stale "Open" make a filled match look cancellable.
+   */
   recordChainState(gameId: string, state: ObservedChainState): void {
+    const prev = observed.get(gameId);
+    if (
+      prev !== undefined &&
+      (state.status < prev.status ||
+        (state.status === prev.status && state.playerCount < prev.playerCount))
+    ) {
+      // Still counts as a fresh observation of the newer state.
+      observed.set(gameId, { ...prev, observedAt: state.observedAt });
+      return;
+    }
     observed.set(gameId, state);
   },
   chainState(gameId: string): ObservedChainState | undefined {

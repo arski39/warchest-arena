@@ -29,7 +29,7 @@ import {
   Winner,
 } from "../core/Schemas";
 import { replacer } from "../core/Util";
-import { getPlayToken } from "./Auth";
+import { getPlayToken, tokenValidFor } from "./Auth";
 import { LobbyConfig } from "./ClientGameRunner";
 import { showInGameAlert } from "./InGameModal";
 import { LocalServer } from "./LocalServer";
@@ -440,7 +440,7 @@ export class Transport {
       clanTag: this.lobbyConfig.playerClanTag ?? null,
       cosmetics: this.lobbyConfig.cosmetics,
       turnstileToken: this.lobbyConfig.turnstileToken,
-      token: await getPlayToken(),
+      token: await this.joinToken(), // [ARENA]
       spectator: this.lobbyConfig.spectator,
       // [ARENA] Undefined for ordinary lobbies; the server only looks at these
       // when the game is registered as wagered.
@@ -448,6 +448,22 @@ export class Transport {
       walletSig: this.lobbyConfig.walletSig,
       onchainTxSig: this.lobbyConfig.onchainTxSig,
     } satisfies ClientJoinMessage);
+  }
+
+  // [ARENA] The first join of a wagered lobby sends the token the wallet
+  // signature was made over (lobbyConfig.walletAuthToken), while it still has
+  // time left: fetching a fresh one could carry a new jti, against which the
+  // server would reject the signature of a stake that is already paid. Later
+  // joins (reconnects) fetch as usual -- the server does not re-check the
+  // signature for a session it has already bound to that wallet.
+  private signedTokenSpent = false;
+  private async joinToken(): Promise<string> {
+    const signed = this.lobbyConfig.walletAuthToken;
+    if (signed !== undefined && !this.signedTokenSpent) {
+      this.signedTokenSpent = true;
+      if (tokenValidFor(signed, 30_000)) return signed;
+    }
+    return getPlayToken();
   }
 
   async rejoinGame(lastTurn: number) {

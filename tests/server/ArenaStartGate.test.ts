@@ -20,6 +20,7 @@ import {
   wagerReadyToStart,
   type WagerConfig,
 } from "../../src/server/arena/matchRegistry";
+import { walletRegistry } from "../../src/server/arena/walletRegistry";
 
 // Typed against settle()'s real signature so the call assertions below are
 // checked rather than inferred as a zero-arg tuple.
@@ -93,9 +94,13 @@ describe("[ARENA] wagered start gate", () => {
    *
    * maybeAutoStartFilledWager() requires every paid seat to be CONNECTED, not
    * merely paid — the escrow reaches InProgress seconds before the last
-   * player's socket does. See ArenaWagerStartPresence.test.ts.
+   * player's socket does. See ArenaWagerStartPresence.test.ts. Each one's
+   * wallet is bound, as the join gate does for a staker it admits.
    */
   function seat(game: GameServer, count: number) {
+    for (let i = 0; i < count; i++) {
+      walletRegistry.bind(game.id, `pid${i}`, `wallet${i}`);
+    }
     (game as any).activeClients = Array.from({ length: count }, (_, i) => ({
       clientID: `p${i}`,
       persistentID: `pid${i}`,
@@ -177,9 +182,22 @@ describe("[ARENA] wagered start gate", () => {
       matchRegistry.register(GAME_ID, wager());
       observe(GAME_ID, MatchStatus.InProgress, 2);
       const game = makeGame(GAME_ID);
+      seat(game, 2);
 
       expect(toggleStart(game).status).toBe(200);
       expect((game as any).startsAt).toBeDefined();
+    });
+
+    it("refuses to arm while a staker is not connected", () => {
+      // Fully staked on chain, but one staker has not arrived (or dropped).
+      // Arming on chain state alone starts a match they cannot play.
+      matchRegistry.register(GAME_ID, wager());
+      observe(GAME_ID, MatchStatus.InProgress, 2);
+      const game = makeGame(GAME_ID);
+      seat(game, 1);
+
+      expect(toggleStart(game).status).toBe(409);
+      expect((game as any).startsAt).toBeUndefined();
     });
 
     it("still lets the host disarm a timer that is already running", () => {
@@ -188,8 +206,9 @@ describe("[ARENA] wagered start gate", () => {
       matchRegistry.register(GAME_ID, wager());
       observe(GAME_ID, MatchStatus.InProgress, 2);
       const game = makeGame(GAME_ID);
+      seat(game, 2);
       toggleStart(game);
-      observe(GAME_ID, MatchStatus.Open, 1);
+      seat(game, 1);
 
       expect(toggleStart(game).status).toBe(200);
       expect((game as any).startsAt).toBeUndefined();

@@ -224,9 +224,11 @@ describe("GameServer - spectators", () => {
     for (const id of ["c1", "c2", "c3", "c4", "c5"]) {
       game.joinClient(makeClient(id, true));
     }
-    // Archiving is a separate concern and needs a started game; the quorum is
-    // what's under test.
+    // Archiving is a separate concern; the quorum is what's under test. The
+    // vote itself is only accepted once the game has started.
     vi.spyOn(game as any, "archiveGame").mockImplementation(() => {});
+    (game as any)._hasStarted = true;
+    (game as any).gameStartInfo = {};
     for (const p of players) {
       (game as any).handleWinner(p, {
         type: "winner",

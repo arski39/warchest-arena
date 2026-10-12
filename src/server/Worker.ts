@@ -28,7 +28,11 @@ import { getUserMe, verifyClientToken } from "./jwt";
 import { logger } from "./Logger";
 import { enforceVerifiedBadge } from "./Privilege";
 
-import { verifyWalletSig, walletAuthNonce } from "./arena/auth";
+import {
+  sessionIsWalletLogin,
+  verifyWalletSig,
+  walletAuthNonce,
+} from "./arena/auth";
 import {
   devBypassEnabled,
   logBypassUse,
@@ -513,6 +517,11 @@ export async function startWorker() {
     if (game.numClients() > 1) {
       return res.status(409).json({ error: "wager_lobby_not_empty" });
     }
+    // [ARENA] Host cheats are refused once a lobby is wagered
+    // (update_game_config); this closes the other order, cheats first.
+    if (game.hasHostCheats()) {
+      return res.status(409).json({ error: "wager_host_cheats" });
+    }
 
     try {
       const wager = await createWageredMatch(game.id, {
@@ -882,9 +891,25 @@ export async function startWorker() {
             ws.close(1002, "Unauthorized: token missing jti for wagered game");
             return;
           }
+          // [ARENA] A session that already proved control of this wallet in
+          // this match is not asked to prove it again. Before start, a dropped
+          // socket loses its persistentId mapping, so a reconnect lands here
+          // rather than in rejoinClient above -- and its token has usually
+          // been refreshed to a new jti since it signed, which used to refuse
+          // a staked player re-entering their own lobby. The binding is keyed
+          // on the authenticated persistentId, so another session still has to
+          // sign. Membership is re-read below either way.
+          const alreadyBound =
+            walletAddress !== undefined &&
+            walletRegistry.get(clientMsg.gameID, persistentId) ===
+              walletAddress;
+          // [ARENA] A wallet login for this address already proved control of
+          // it, so a signed-in player is not asked for a second signature.
           if (
             !walletAddress ||
-            !verifyWalletSig(nonce, walletAddress, clientMsg.walletSig)
+            (!alreadyBound &&
+              !sessionIsWalletLogin(claims, walletAddress) &&
+              !verifyWalletSig(nonce, walletAddress, clientMsg.walletSig))
           ) {
             log.warn("Invalid wallet signature for wagered game", {
               persistentID: persistentId,
@@ -942,7 +967,41 @@ export async function startWorker() {
               return;
             }
           }
-          walletRegistry.set(persistentId, walletAddress);
+          // [ARENA] One staked wallet, one seat. The join gate proves that a
+          // wallet paid, not that this is the only session using it: without
+          // this, a staker could open the lobby again from a second browser
+          // (a new guest, so a new persistentId), be seated twice on one
+          // stake, and count as both "present" seats. A session that is gone
+          // may hand its wallet over before start -- that is a player coming
+          // back on a fresh session -- but never after, because the frozen
+          // roster and the payout both resolve through the original session.
+          const holder = walletRegistry.holderOf(
+            clientMsg.gameID,
+            walletAddress,
+          );
+          if (holder !== undefined && holder !== persistentId) {
+            const game = gm.game(clientMsg.gameID);
+            if (
+              game === null ||
+              game.hasStarted() ||
+              game.isPersistentIdConnected(holder)
+            ) {
+              log.warn(
+                "Wallet already seated in this match by another session",
+                {
+                  persistentID: persistentId,
+                  gameID: clientMsg.gameID,
+                },
+              );
+              ws.close(
+                1002,
+                "This wallet is already playing in this match from another session",
+              );
+              return;
+            }
+            walletRegistry.unbind(clientMsg.gameID, holder);
+          }
+          walletRegistry.bind(clientMsg.gameID, persistentId, walletAddress);
           log.info("Wallet auth passed for wagered game", {
             persistentID: persistentId,
             gameID: clientMsg.gameID,

@@ -108,6 +108,8 @@ export interface LobbyConfig {
   walletAddress?: string;
   walletSig?: string;
   onchainTxSig?: string;
+  // [ARENA] The token walletSig was signed against; sent with the first join.
+  walletAuthToken?: string;
 }
 
 export interface JoinLobbyResult {
@@ -229,8 +231,12 @@ export function joinLobby(
             composed: true,
           }),
         );
-      } else if (message.error === "kick_reason.host_left") {
-        showInGameAlert(translateText("kick_reason.host_left")).then(() => {
+      } else if (
+        message.error === "kick_reason.host_left" ||
+        // [ARENA] Same handling: say why, then leave the dead lobby.
+        message.error === "kick_reason.wager_start_failed"
+      ) {
+        showInGameAlert(translateText(message.error)).then(() => {
           document.dispatchEvent(
             new CustomEvent("leave-lobby", {
               detail: { lobby: lobbyConfig.gameID, cause: "host-left" },

@@ -47,6 +47,8 @@ GET  /auth/wallet/challenge     a signed, short-lived nonce
 POST /auth/wallet               {walletAddress, challenge, signature} exchange
 POST /auth/logout, /auth/revoke clear the cookie
 GET  /cosmetics.json, /reserved_clan_tags   empty catalogues
+POST /game/:id                  store a finished game's record (api key)
+GET  /game/:id                  serve it back, as a replay
 ```
 
 ### It has no database, and that is a design choice
@@ -74,6 +76,10 @@ from the session or an operator constant. That makes the service stateless:
 revocation list. `/auth/revoke` can only clear the cookie, so an access token
 already issued stays valid for up to its 15-minute lifetime. Closing that gap
 needs a denylist, which needs storage.
+
+**One exception, and it is not session state:** the game-record store below
+writes files. It holds no identity and nothing a token depends on, so the
+statelessness above still holds for everything auth-shaped.
 
 ### The signing key
 
@@ -131,6 +137,20 @@ guest who no longer exists.
 ownership per match on its own (`server/arena/auth.ts`), so the guest path is
 untouched and free play stays zero-click.
 
+**But logging in removes a prompt from every wagered game.** The join gate
+accepts a wallet login _for the staked address_ in place of the per-match
+signature (`sessionIsWalletLogin`): it recomputes the address-derived id
+(`core/arena/walletIdentity.ts`, shared with `identity.ts` and the browser) and
+compares it with the token's `sub`, alongside `provider === "wallet"`. The stake
+prompt makes the same comparison (`proveWallet`) and skips the message prompt,
+so a signed-in player approves only the stake transaction. A guest, or a
+player signed in as one wallet and staking from another, still signs. What this
+gives up is freshness — control proved at login rather than within one access
+token — and nothing else: whoever holds the session already _is_ that player,
+and the payout goes to the wallet. Pinned and mutation-checked in
+`tests/ArenaWalletLoginProof.test.ts`, including the derived id's exact value,
+because changing `WALLET_USER_NS` would rename every wallet player.
+
 `/users/@me` deliberately still reports `user: {}` — see `userMe.ts`. The wallet
 is not surfaced there because every consumer of that block would then offer
 account management this fork has no backend for.
@@ -183,3 +203,38 @@ POST /join_verify        x-api-key: <API_KEY>
 
 `tests/server/AuthTurnstile.test.ts` pins all of the above, and the hostname pin
 and the reject path are mutation-checked.
+
+## `/game/:id` — the game-record store
+
+Upstream's API kept every finished game. Two callers were written against it:
+`server/Archive.ts` POSTs the record when a game ends, and
+`JoinLobbyModal.checkArchivedGame` GETs it when someone opens a finished game's
+link, turning it into a replay. With no route here the POST died on the 8 kB
+JSON limit (`error archiving game record: Request Entity Too Large`) and the GET
+404'd, so no finished game could be replayed and **no record of a wagered match
+was kept anywhere**. `src/auth/gameArchive.ts` is the missing half.
+
+- **Opt-in via `GAME_ARCHIVE_DIR`.** Unset, neither route is registered and the
+  behaviour is exactly the old one. The deploy sets it from `GAME_ARCHIVE`, a
+  host directory mounted read-write, created and chowned to uid 1000 by
+  `warchest.sh`. A directory the process cannot write fails the boot.
+- **The write needs the api key, strictly** — a missing header is refused, not
+  just a wrong one. **With `API_KEY` empty outside dev the POST is not
+  registered at all**, because `apiKeyMissingOrWrong`'s "empty disables the
+  check" would otherwise make it an anonymous, disk-filling write.
+- **Write-once.** `link()` rather than `rename()`, so a second record for an id
+  gets `409` and cannot replace the first. That, plus the key, is what stops
+  anyone planting the replay behind a game id.
+- **The record must be for the id it is filed under** (`info.gameID`), and the
+  id must match the game-id regex before it becomes a filename.
+- **Not validated against `GameRecordSchema`.** That schema's import graph
+  reaches `resources/`. The game server `safeParse`s before sending, and
+  `checkArchivedGame` parses what it reads.
+- **Stored gzipped and served with `Content-Encoding: gzip`**, so a read never
+  decompresses. `Cache-Control: immutable` is honest because of write-once.
+- **Only this route has a large body limit** (50 MB). Every other route keeps
+  the 8 kB ceiling, which a method+path check in front of the global parser
+  preserves.
+
+`tests/server/AuthGameArchive.test.ts`. The key check, the no-key refusal,
+write-once and the id match are each mutation-checked.

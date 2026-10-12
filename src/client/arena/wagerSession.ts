@@ -85,3 +85,47 @@ export function stakedMatch(gameID: string): StakedMatch | null {
     return null;
   }
 }
+
+// [ARENA] Which wallet this tab staked into a match with, so a reload goes
+// straight back into the match instead of through the stake prompt.
+//
+// The prompt is several round-trips and a wallet signature, and a duel is
+// forfeited after ~30 s without pings -- so a player who reloaded mid-match
+// used to lose a match they were winning while clicking through it. With the
+// address remembered, the reconnect is admitted on the session the server has
+// already bound to that wallet: by rejoin after start, and before start by the
+// join gate, which skips the signature for a bound session and re-reads the
+// escrow. Not a credential: a value the server has not bound to this session
+// is refused like any unsigned join.
+const WALLET_KEY_PREFIX = "arena_wager_wallet:";
+
+export function rememberStakeWallet(gameID: string, address: string): void {
+  try {
+    sessionStorage.setItem(WALLET_KEY_PREFIX + gameID, address);
+  } catch {
+    // Storage unavailable: a reload goes through the prompt, as before.
+  }
+}
+
+export function stakeWallet(gameID: string): string | null {
+  try {
+    const v = sessionStorage.getItem(WALLET_KEY_PREFIX + gameID);
+    return v !== null && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read once: the reconnect that uses it consumes it, and Main writes it back
+ * when the match (re)starts. A remembered wallet the server refuses -- e.g.
+ * after a sign-in changed this tab's session -- then costs one failed join,
+ * after which the stake prompt runs as usual, instead of looping.
+ */
+export function forgetStakeWallet(gameID: string): void {
+  try {
+    sessionStorage.removeItem(WALLET_KEY_PREFIX + gameID);
+  } catch {
+    // Nothing to forget.
+  }
+}

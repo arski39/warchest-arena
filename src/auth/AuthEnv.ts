@@ -116,6 +116,18 @@ export class AuthEnv {
     return process.env.TURNSTILE_SECRET_KEY ?? "";
   }
 
+  /**
+   * [ARENA] Directory game records are stored in (gameArchive.ts). Unset
+   * leaves /game/:id unregistered: finished games cannot be replayed and the
+   * game server's archive POST 404s, which is this fork's historical
+   * behaviour. In a container this must be a mounted volume, or every record
+   * is lost on the next deploy.
+   */
+  static gameArchiveDir(): string | undefined {
+    const v = process.env.GAME_ARCHIVE_DIR;
+    return v && v.length > 0 ? v : undefined;
+  }
+
   static accessTtlSeconds(): number {
     return ACCESS_TTL_SECONDS;
   }

@@ -6,9 +6,11 @@
 //     wallet implements, discovered through two window events. This is what
 //     brings Solflare, Backpack, Glow and the rest, and it is also what Mobile
 //     Wallet Adapter registers itself into.
-//   * **Phantom's injected provider** (`window.phantom.solana`) — kept as a
-//     fallback for builds old enough not to register, and deduped by name
-//     against the Standard registration so Phantom never appears twice.
+//   * **Injected providers** (`window.phantom.solana`,
+//     `window.trustwallet.solana`) — a fallback for wallets that do not
+//     register: old Phantom builds, and Trust Wallet, whose docs do not say
+//     whether it does. Deduped by name against the Standard registration so a
+//     wallet never appears twice.
 //
 // This module is in the MAIN chunk: `Main.ts` calls `mountWalletProvider()` at
 // module scope. It must therefore stay free of `@solana/web3.js` (~294 kB),
@@ -19,9 +21,11 @@
 // All wagered-game UI imports from here rather than touching wallet SDKs.
 import { ClientEnv } from "../ClientEnv";
 import { sessionIsBound } from "./sessionBinding";
+import { KNOWN_WALLETS, sameWallet } from "./walletDirectory";
 import { rememberWalletName, storedWalletName } from "./walletSession";
 import {
   adaptStandardWallet,
+  base58,
   canSignMessage,
   connectStandard,
   mountRegistry,
@@ -30,6 +34,7 @@ import {
   pickerIcon,
   registeredWallets,
   solanaChainFor,
+  WalletAlteredMessageError,
   type SolanaChain,
   type StandardAccount,
   type StandardWallet,
@@ -91,27 +96,49 @@ export interface WalletAdapter {
   readonly submit: StakeSubmit | null;
 }
 
-type PhantomProvider = {
-  publicKey: { toBase58(): string } | null;
+/**
+ * [ARENA] A wallet's own injected Solana provider -- the pre-Wallet-Standard
+ * API that Phantom and Trust Wallet both still put on `window`.
+ *
+ * The two differ in small ways, typed loosely here and handled per wallet in
+ * INJECTED below: Phantom's `publicKey` is a web3.js PublicKey (`toBase58`)
+ * while Trust's adapter only promises `toBytes`, and Phantom's `signMessage`
+ * takes a display encoding that Trust's does not.
+ */
+type InjectedProvider = {
+  publicKey: { toBase58?(): string; toBytes?(): Uint8Array } | null;
   isConnected: boolean;
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
+  connect(): Promise<unknown>;
   signMessage(
     message: Uint8Array,
-    encoding: "utf8" | "hex",
+    encoding?: "utf8" | "hex",
   ): Promise<{ signature: Uint8Array }>;
-  // Phantom's injected API is the one backend that still wants an object. It is
-  // typed structurally so this module needs no `@solana/web3.js` import at all --
-  // see phantomLegacyTx.ts, which is lazily imported only if this path is used.
+  // The injected APIs are the one backend that still wants an object. Typed
+  // structurally so this module needs no `@solana/web3.js` import at all -- see
+  // phantomLegacyTx.ts, which is lazily imported only if this path is used.
   signTransaction(transaction: unknown): Promise<{ serialize(): Uint8Array }>;
 };
 
-function getPhantom(): PhantomProvider | null {
-  const w = window as unknown as {
-    phantom?: { solana?: PhantomProvider };
-    solana?: PhantomProvider;
-  };
-  return w.phantom?.solana ?? w.solana ?? null;
+type InjectedWindow = {
+  phantom?: { solana?: InjectedProvider };
+  solana?: InjectedProvider & { isPhantom?: boolean };
+  trustwallet?: { solana?: InjectedProvider & { isTrust?: boolean } };
+};
+
+/** One wallet reachable through its injected provider. */
+interface InjectedWallet {
+  readonly name: string;
+  find(): InjectedProvider | null;
+  /** Phantom's signMessage takes a display encoding; Trust's takes only the bytes. */
+  readonly displayArg: boolean;
+}
+
+/** base58 of an injected provider's public key, or null if it offers neither form. */
+function addressOf(pk: InjectedProvider["publicKey"]): string | null {
+  if (pk === null) return null;
+  if (typeof pk.toBase58 === "function") return pk.toBase58();
+  if (typeof pk.toBytes === "function") return base58(pk.toBytes());
+  return null;
 }
 
 /**
@@ -128,7 +155,7 @@ function getPhantom(): PhantomProvider | null {
  * phone is shown install instructions -- which is why a UA test is tolerable
  * here and would not be for anything load-bearing.
  */
-function isMobileBrowser(): boolean {
+export function isMobileBrowser(): boolean {
   const ua = navigator.userAgent;
   const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
   return /Android|iPhone|iPod|iPad/i.test(ua) || iPadOS;
@@ -156,17 +183,56 @@ function isMobileBrowser(): boolean {
  * with one person twice over.
  */
 export function phantomBrowseLink(): string | null {
-  if (getPhantom() !== null || usableWallets().length > 0) return null;
+  if (anyInjected() || usableWallets().length > 0) return null;
   if (!isMobileBrowser()) return null;
-  const target = encodeURIComponent(window.location.href);
-  const ref = encodeURIComponent(
-    `${window.location.protocol}//${window.location.host}`,
+  const phantom = KNOWN_WALLETS.find((w) => w.name === PHANTOM_NAME);
+  return (
+    phantom?.browseLink?.(
+      window.location.href,
+      `${window.location.protocol}//${window.location.host}`,
+    ) ?? null
   );
-  return `https://phantom.app/ul/browse/${target}?ref=${ref}`;
 }
 
 /** The name Phantom registers under, used to dedupe injected vs Wallet Standard. */
 export const PHANTOM_NAME = "Phantom";
+
+/** What Trust Wallet's Solana adapter calls it. Matched loosely (sameWallet). */
+export const TRUST_NAME = "Trust";
+
+/**
+ * [ARENA] Wallets reachable through an injected provider, for when they do not
+ * register through Wallet Standard. Phantom has registered since 2022, so its
+ * entry covers old builds; Trust Wallet's docs do not say whether its extension
+ * registers at all, so its entry may be the only way in. Either way a Wallet
+ * Standard registration under the same name wins (listWallets).
+ *
+ * Phantom's bare `window.solana` is accepted only with `isPhantom` set: other
+ * wallets claim that global too, and without the check a player with only
+ * Trust installed was offered a "Phantom" row that connected Trust.
+ */
+const INJECTED: readonly InjectedWallet[] = [
+  {
+    name: PHANTOM_NAME,
+    displayArg: true,
+    find: () => {
+      const w = window as unknown as InjectedWindow;
+      return w.phantom?.solana ?? (w.solana?.isPhantom ? w.solana : null);
+    },
+  },
+  {
+    name: TRUST_NAME,
+    displayArg: false,
+    find: () => {
+      const t = (window as unknown as InjectedWindow).trustwallet?.solana;
+      return t?.isTrust ? t : null;
+    },
+  },
+];
+
+function anyInjected(): boolean {
+  return INJECTED.some((i) => i.find() !== null);
+}
 
 /** A wallet the player could pick. What a picker row renders from. */
 export interface WalletChoice {
@@ -219,30 +285,51 @@ let _connected: WalletAdapter | null = null;
 let _off: (() => void) | null = null;
 
 /**
- * The injected-Phantom backend.
+ * The injected-provider backend (Phantom's old builds, Trust Wallet).
  *
- * Note what is NOT here: the signed-message comparison the Wallet Standard
- * adapter does. Phantom's injected `signMessage` returns only `{ signature }` --
- * there is no `signedMessage` to compare against, so the check cannot run on this
- * path. That is the status quo rather than a hole this change opens: Phantom is
- * known to sign the raw bytes, the current code has depended on it in production,
- * and the check now guards every other wallet.
+ * Injected `signMessage` returns only `{ signature }`, so the signed-message
+ * comparison the Wallet Standard adapter does cannot run here. For Phantom that
+ * is the status quo -- it is known to sign the raw bytes and production has
+ * depended on it. For every other injected wallet the signature is instead
+ * VERIFIED here, against the address, before it is returned: a wallet that
+ * signed anything but these exact bytes is refused at the prompt, before any
+ * stake moves, rather than by the server after it has (the case
+ * WalletAlteredMessageError exists for). The verifier pulls in web3.js, so it is
+ * imported lazily, and only on this path.
  */
-function adapterFor(provider: PhantomProvider, pubkey: string): WalletAdapter {
+function adapterFor(
+  injected: InjectedWallet,
+  provider: InjectedProvider,
+  pubkey: string,
+): WalletAdapter {
+  const trusted = injected.name === PHANTOM_NAME;
   return {
     publicKey: pubkey,
-    name: PHANTOM_NAME,
+    name: injected.name,
     icon: "",
     signMessage: async (msg) => {
-      const result = await provider.signMessage(msg, "utf8");
-      return result.signature;
+      const result = injected.displayArg
+        ? await provider.signMessage(msg, "utf8")
+        : await provider.signMessage(msg);
+      const signature = result.signature;
+      if (!trusted) {
+        const { verifyEd25519Signature } =
+          await import("../../core/arena/walletSignature");
+        const ok = verifyEd25519Signature(
+          new TextDecoder().decode(msg),
+          pubkey,
+          toBase64(Uint8Array.from(signature)),
+        );
+        if (!ok) throw new WalletAlteredMessageError(injected.name);
+      }
+      return signature;
     },
     submit: {
       kind: "sign",
       signTransaction: async (wire) => {
-        const { deserializeForPhantom } = await import("./phantomLegacyTx");
+        const { toLegacyTransaction } = await import("./phantomLegacyTx");
         const signed = await provider.signTransaction(
-          deserializeForPhantom(wire),
+          toLegacyTransaction(wire),
         );
         return signed.serialize();
       },
@@ -258,18 +345,21 @@ function usableWallets(): StandardWallet[] {
 /**
  * Every wallet the player could connect right now.
  *
- * Phantom is deduped by name: it registers through Wallet Standard *and* injects
- * `window.phantom.solana`, and the registration is the better of the two — it
- * carries an icon and reports its capabilities. The injected provider therefore
- * contributes a row only when nothing registered under that name.
+ * Injected wallets are deduped by name: Phantom registers through Wallet
+ * Standard *and* injects `window.phantom.solana`, and the registration is the
+ * better of the two — it carries an icon and reports its capabilities. An
+ * injected provider therefore contributes a row only when nothing registered
+ * under that name, compared loosely (`sameWallet`) because Trust may register
+ * as "Trust Wallet".
  */
 export function listWallets(): WalletChoice[] {
   const rows: WalletChoice[] = usableWallets().map((w) => ({
     name: w.name,
     icon: pickerIcon(w.icon),
   }));
-  if (!rows.some((r) => r.name === PHANTOM_NAME) && getPhantom() !== null) {
-    rows.push({ name: PHANTOM_NAME, icon: "" });
+  for (const injected of INJECTED) {
+    if (rows.some((r) => sameWallet(r.name, injected.name))) continue;
+    if (injected.find() !== null) rows.push({ name: injected.name, icon: "" });
   }
   return rows;
 }
@@ -386,21 +476,37 @@ export async function connectWallet(name?: string): Promise<WalletAdapter> {
   }
 
   if (wallet === null) {
-    // No Standard wallet to use. The injected provider is the last resort, and
-    // it is Phantom's alone.
-    if (name !== undefined && name !== PHANTOM_NAME) {
-      throw new WalletConnectError("unknown_wallet", name);
+    // No Standard wallet to use. An injected provider is the last resort:
+    // the one named, or with no name the one used last, then any present.
+    let injected: InjectedWallet | undefined;
+    if (name !== undefined) {
+      injected = INJECTED.find((i) => sameWallet(i.name, name));
+      if (injected === undefined) {
+        throw new WalletConnectError("unknown_wallet", name);
+      }
+    } else {
+      const remembered = storedWalletName();
+      injected =
+        INJECTED.find(
+          (i) =>
+            remembered !== null &&
+            sameWallet(i.name, remembered) &&
+            i.find() !== null,
+        ) ?? INJECTED.find((i) => i.find() !== null);
     }
-    const provider = getPhantom();
-    if (provider === null) throw new WalletConnectError("no_wallet", null);
+    const provider = injected?.find() ?? null;
+    if (injected === undefined || provider === null) {
+      throw new WalletConnectError("no_wallet", null);
+    }
     await provider.connect();
-    if (!provider.publicKey) {
-      throw new WalletConnectError("no_account", PHANTOM_NAME);
+    const address = addressOf(provider.publicKey);
+    if (address === null) {
+      throw new WalletConnectError("no_account", injected.name);
     }
     _off?.();
     _off = null;
-    _connected = adapterFor(provider, provider.publicKey.toBase58());
-    rememberWalletName(PHANTOM_NAME);
+    _connected = adapterFor(injected, provider, address);
+    rememberWalletName(injected.name);
     return _connected;
   }
 
@@ -483,14 +589,25 @@ export function mountWalletProvider(): void {
   onRegistryChange(reconnectRemembered);
   reconnectRemembered();
 
-  // Fallback for a Phantom old enough not to register. Its auto-connect has
-  // usually not finished by module scope, which is why `walletSession.ts`
-  // remembers the address for display — this picks up only the case where it
-  // already has.
+  // Fallback for wallets reachable only through an injected provider. Their
+  // auto-connect has usually not finished by module scope, which is why
+  // `walletSession.ts` remembers the address for display — this picks up only
+  // the case where it already has, preferring the wallet used last.
   if (_connected === null) {
-    const provider = getPhantom();
-    if (provider?.isConnected === true && provider.publicKey) {
-      _connected = adapterFor(provider, provider.publicKey.toBase58());
+    const remembered = storedWalletName();
+    const order = [...INJECTED].sort(
+      (a, b) =>
+        Number(remembered !== null && sameWallet(b.name, remembered)) -
+        Number(remembered !== null && sameWallet(a.name, remembered)),
+    );
+    for (const injected of order) {
+      const provider = injected.find();
+      const address =
+        provider?.isConnected === true ? addressOf(provider.publicKey) : null;
+      if (provider !== null && address !== null) {
+        _connected = adapterFor(injected, provider, address);
+        break;
+      }
     }
   }
 }

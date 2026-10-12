@@ -232,6 +232,24 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
+/**
+ * [ARENA] A wallet output as bytes. The features are typed as Uint8Array, but
+ * the value crosses an extension boundary in some wallets and arrives as a
+ * plain number array -- which has the right contents and no typed-array
+ * identity. Taking it as bytes is what lets the comparison below be about the
+ * CONTENTS; anything else is not bytes at all and is rejected as such.
+ */
+function asBytes(v: unknown): Uint8Array | null {
+  if (v instanceof Uint8Array) return v;
+  if (ArrayBuffer.isView(v)) {
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  if (Array.isArray(v) && v.every((n) => Number.isInteger(n))) {
+    return Uint8Array.from(v as number[]);
+  }
+  return null;
+}
+
 /** Only a `data:image/*` URI is safe to render. See pickerIcon below. */
 const DATA_IMAGE = /^data:image\/(png|jpeg|gif|svg\+xml|webp);base64,/;
 
@@ -301,7 +319,12 @@ export function negotiateSubmit(
               ? { account, transaction }
               : { account, transaction, chain: hint },
           );
-          return out.signedTransaction;
+          // [ARENA] As bytes; see asBytes().
+          const signed = asBytes(out.signedTransaction);
+          if (signed === null) {
+            throw new Error(`${wallet.name} returned no signed transaction`);
+          }
+          return signed;
         },
       },
       blocked: null,
@@ -323,7 +346,11 @@ export function negotiateSubmit(
           transaction,
           chain,
         });
-        return base58(out.signature);
+        const signature = asBytes(out.signature);
+        if (signature === null) {
+          throw new Error(`${wallet.name} returned no transaction signature`);
+        }
+        return base58(signature);
       },
     },
     blocked: null,
@@ -422,10 +449,23 @@ export function adaptStandardWallet(
       // THE CHECK. See WalletAlteredMessageError: the server verifies these
       // exact bytes, so a wallet that signed anything else has produced a
       // signature that will be refused after the stake has already been paid.
-      if (!bytesEqual(out.signedMessage, message)) {
+      //
+      // [ARENA] Compared by contents. A wallet that leaves signedMessage out
+      // (the spec requires it, not every wallet obliges) is taken at its word:
+      // there is nothing to compare, and the server still verifies the exact
+      // bytes. Treating the omission as "altered" -- or letting it throw on
+      // `.length` -- would lock that wallet out of signing in and staking
+      // entirely, with no recourse.
+      const signedMessage =
+        out.signedMessage === undefined ? message : asBytes(out.signedMessage);
+      if (signedMessage === null || !bytesEqual(signedMessage, message)) {
         throw new WalletAlteredMessageError(wallet.name);
       }
-      return out.signature;
+      const signature = asBytes(out.signature);
+      if (signature === null) {
+        throw new Error(`${wallet.name} returned no usable signature`);
+      }
+      return signature;
     },
     submit: negotiated.submit,
     blocked: negotiated.blocked,

@@ -7,6 +7,11 @@
 import * as dotenv from "dotenv";
 import { AuthEnv } from "./AuthEnv";
 import { authLogger } from "./AuthLogger";
+import {
+  assertArchiveWritable,
+  createFileGameArchive,
+  type GameArchive,
+} from "./gameArchive";
 import { makeOriginPredicate } from "./http";
 import { createAuthApp } from "./routes";
 import { loadSigningKey } from "./signingKey";
@@ -20,6 +25,21 @@ export async function startAuthServer(): Promise<void> {
   AuthEnv.warnIfPortMismatch(authLogger);
 
   const key = await loadSigningKey(AuthEnv.signingKeyPath(), isDev, authLogger);
+
+  // [ARENA] Checked at boot, so a volume the container cannot write fails the
+  // deploy instead of silently dropping the first finished game's record.
+  const archiveDir = AuthEnv.gameArchiveDir();
+  let gameArchive: GameArchive | undefined;
+  if (archiveDir !== undefined) {
+    await assertArchiveWritable(archiveDir);
+    gameArchive = createFileGameArchive(archiveDir);
+    authLogger.info(`Game records stored in ${archiveDir}`);
+  } else {
+    authLogger.warn(
+      "GAME_ARCHIVE_DIR is unset — finished games are not stored and cannot " +
+        "be replayed.",
+    );
+  }
 
   const app = createAuthApp({
     key,
@@ -45,6 +65,7 @@ export async function startAuthServer(): Promise<void> {
     // [ARENA] Empty leaves /join_verify unregistered; see AuthEnv.
     turnstileSecret: AuthEnv.turnstileSecretKey(),
     isDev,
+    gameArchive, // [ARENA]
   });
 
   // [ARENA] Said out loud, because the failure is silent otherwise: with no

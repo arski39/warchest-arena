@@ -90,8 +90,7 @@
     "wallet_login_desc": "Sign a message with your Solana wallet. No email, no password, nothing stored — the same wallet is the same player everywhere.",
     "wallet_login_failed": "Could not sign you in. Try again.",
     "wallet_no_extension": "No Solana wallet found. Install Phantom (phantom.app) to sign in.",
-    "wallet_open_phantom": "Open in Phantom",
-    "wallet_open_phantom_hint": "On a phone, sign in from inside the Phantom app’s browser. Tap “Open in Phantom” to go there.",
+    "wallet_open_phantom_hint": "On a phone, sign in from inside your wallet app’s browser. Tap “Connect wallet” and choose “Open app”.",
     "wallet_session_desc": "Your wallet is your account here — the same wallet is the same player on any device, and nothing is stored server-side.",
     "wallet_signed_in": "Signed in with your wallet",
     "your_subscription": "Your Subscription"
@@ -922,6 +921,7 @@
     "wager_error_wager_creation_failed": "The on-chain escrow could not be created. The lobby is still free to play.",
     "wager_error_wager_entry_fee_too_high": "That stake is above this server's limit. Choose a smaller one.",
     "wager_error_wager_game_already_started": "The game has already started.",
+    "wager_error_wager_host_cheats": "Turn off host cheats before attaching a stake.",
     "wager_error_wager_lobby_not_empty": "Set the stake before anyone joins — players already in the lobby have not staked.",
     "wager_error_wager_not_configured": "This server is not configured for wagered matches.",
     "wager_error_wager_private_lobbies_only": "Wagered matches must stay private.",
@@ -953,8 +953,9 @@
     "host_left": "The host has left the lobby.",
     "lobby_creator": "Kicked by lobby creator",
     "match_cancelled": "Match cancelled: a player failed to connect. You have not lost any ELO.",
-    "wager_cancelled_refunded": "Nobody joined in time, so the match was cancelled and your stake has been refunded.",
-    "wager_not_full": "Every staked seat must be filled before this match can start. A wagered match that starts with empty seats cannot pay out."
+    "wager_cancelled_refunded": "Nobody joined in time, so the match was cancelled and your stake is being refunded.",
+    "wager_not_full": "Every staked seat must be filled before this match can start. A wagered match that starts with empty seats cannot pay out.",
+    "wager_start_failed": "This match could not start. Your stake stays in escrow and is refunded automatically within 24 hours."
   },
   "lang": {
     "en": "English",
@@ -1811,6 +1812,7 @@
     "error_no_account": "Your wallet did not share an account. Unlock it and try again.",
     "error_no_wallet": "No Solana wallet found. Install one — Phantom (phantom.app), Solflare or Backpack all work — then reload this page.",
     "error_not_open": "This match is no longer open for staking — every seat is taken.",
+    "error_page_outdated": "This page is out of date. Reload it, then join the match again.",
     "error_rpc_unavailable": "Could not reach the Solana network. Please try again in a moment.",
     "error_unconfirmed": "Your stake was submitted but could not be confirmed. Check your wallet, then try again — a stake that did land cannot be charged twice.",
     "error_unknown_wallet": "That wallet is no longer available in this browser. Pick another one.",
@@ -1833,6 +1835,18 @@
     "refresh": "Refresh",
     "stale": "Could not refresh — showing the last known balance.",
     "title": "Wallet"
+  },
+  "wallet_picker": {
+    "cancel": "Cancel",
+    "detected": "Detected",
+    "fewer_wallets": "Fewer wallets",
+    "install": "Install",
+    "last_used": "Last used",
+    "more_wallets": "More wallets",
+    "open_app": "Open app",
+    "reload_hint": "Installed one just now? Reload this page to see it.",
+    "sign_in_subtitle": "Choose a wallet to sign in",
+    "title": "Choose a wallet"
   },
   "win_modal": {
     "arena_lost_body": "Your {stake} stake goes to the winner.",

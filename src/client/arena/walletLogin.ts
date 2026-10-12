@@ -34,12 +34,11 @@ import { getApiBase, invalidateUserMe } from "../Api";
 import { adoptSession } from "../Auth";
 import {
   WalletConnectError,
-  connectWallet,
-  getConnectedWallet,
   toBase64,
   type WalletAdapter,
 } from "./WalletProvider";
 import { sessionIsBound } from "./sessionBinding";
+import { connectForSignIn } from "./walletPicker";
 import { rememberWalletAddress } from "./walletSession";
 import { WalletAlteredMessageError } from "./walletStandard";
 
@@ -139,8 +138,19 @@ export async function walletLogin(): Promise<{ walletAddress: string }> {
 
   let wallet: WalletAdapter;
   try {
-    wallet = getConnectedWallet() ?? (await connectWallet());
+    // [ARENA] Always asks: signing in is where a new player meets the wallet
+    // side of the site, and the picker is also how a player with no wallet (or
+    // on a phone) is shown where to get one. Closing it is a change of mind,
+    // reported exactly as declining the wallet's own prompt is -- AccountModal
+    // shows nothing for "rejected". So is leaving for a wallet app, since the
+    // page is unloading.
+    const picked = await connectForSignIn();
+    if (picked === null) {
+      throw new WalletLoginError("rejected", "Wallet choice was dismissed.");
+    }
+    wallet = picked;
   } catch (e) {
+    if (e instanceof WalletLoginError) throw e;
     if (isUserRejection(e)) {
       throw new WalletLoginError("rejected", "Wallet connection was declined.");
     }
